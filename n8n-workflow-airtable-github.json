@@ -116,7 +116,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Get the repo mapping from Airtable\nconst projectInfo = $input.first().json;\nconst airtableRecords = $input.all()[1].json.records || [];\n\nlet repoConfig = {\n  owner: 'default-owner',\n  repo: 'default-repo', \n  path_prefix: 'docs/'\n};\n\n// If we found a matching record in Airtable, use it\nif (airtableRecords.length > 0) {\n  const record = airtableRecords[0].fields;\n  repoConfig = {\n    owner: record.owner || repoConfig.owner,\n    repo: record.repo || repoConfig.repo,\n    path_prefix: record.path_prefix || repoConfig.path_prefix\n  };\n}\n\n// Generate markdown content\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD\nconst timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS\n\nconst markdownContent = `# ${projectInfo.fileName}\n\n**Date:** ${dateStr}  \n**Time:** ${timeStr}  \n**Channel:** ${projectInfo.channel}  \n**User:** ${projectInfo.user}  \n**Project ID:** ${projectInfo.project_id}\n\n---\n\n${projectInfo.fileContent}\n\n---\n\n*Generated automatically from Slack via n8n*\n`;\n\n// Generate file path\nconst filePath = `${repoConfig.path_prefix}${dateStr}-${projectInfo.fileName.replace('.txt', '.md')}`;\n\nreturn {\n  json: {\n    owner: repoConfig.owner,\n    repo: repoConfig.repo,\n    filePath: filePath,\n    markdownContent: markdownContent,\n    commitMessage: `Add meeting notes: ${projectInfo.fileName} (${dateStr})`,\n    originalEvent: projectInfo\n  }\n};"
+        "jsCode": "// Get the repo mapping from Airtable\nconst projectInfo = $input.first().json;\nconst airtableRecords = $input.all()[1].json.records || [];\n\nlet repoConfig = {\n  owner: 'default-owner',\n  repo: 'default-repo', \n  path_prefix: 'docs/',\n  branch: 'main'  // デフォルトブランチ\n};\n\n// If we found a matching record in Airtable, use it\nif (airtableRecords.length > 0) {\n  const record = airtableRecords[0].fields;\n  repoConfig = {\n    owner: record.owner || repoConfig.owner,\n    repo: record.repo || repoConfig.repo,\n    path_prefix: record.path_prefix || repoConfig.path_prefix,\n    branch: record.branch || repoConfig.branch  // Airtableからブランチ情報を取得、なければデフォルト\n  };\n}\n\n// Generate markdown content\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD\nconst timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS\n\nconst markdownContent = `# ${projectInfo.fileName}\n\n**Date:** ${dateStr}  \n**Time:** ${timeStr}  \n**Channel:** ${projectInfo.channel}  \n**User:** ${projectInfo.user}  \n**Project ID:** ${projectInfo.project_id}\n\n---\n\n${projectInfo.fileContent}\n\n---\n\n*Generated automatically from Slack via n8n*\n`;\n\n// Generate file path\nconst filePath = `${repoConfig.path_prefix}${dateStr}-${projectInfo.fileName.replace('.txt', '.md')}`;\n\nreturn {\n  json: {\n    owner: repoConfig.owner,\n    repo: repoConfig.repo,\n    branch: repoConfig.branch,\n    filePath: filePath,\n    markdownContent: markdownContent,\n    commitMessage: `Add meeting notes: ${projectInfo.fileName} (${dateStr})`,\n    originalEvent: projectInfo\n  }\n};"
       },
       "id": "67890123-7890-123a-bcde-f0123456789f",
       "name": "Generate Markdown",
@@ -145,7 +145,7 @@
         "fileContent": "={{ $json.markdownContent }}",
         "commitMessage": "={{ $json.commitMessage }}",
         "additionalParameters": {
-          "branch": "main"
+          "branch": "={{ $json.branch }}"
         }
       },
       "id": "78901234-8901-234a-bcde-f01234567890",

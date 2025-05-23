@@ -4,45 +4,58 @@
 `app9oeZUNRWZyaSdb`
 
 ## Table名
-`RepoMap`
+`project_id` (実際のテーブル名)
 
 ## フィールド構成
 
 | Field Name | Type | Description |
 |------------|------|-------------|
-| project_id | Single line text | プロジェクト識別子（ファイル名から抽出） |
+| Name | Single line text | プロジェクト識別子（primary field、ファイル名から抽出される project_id） |
 | owner | Single line text | GitHubオーナー名 |
 | repo | Single line text | GitHubリポジトリ名 |
 | path_prefix | Single line text | ファイル保存先パス |
+| branch | Single line text | GitHubブランチ名（オプション、デフォルト: main） |
 
 ## サンプルデータ
 
 ### レコード1
-- **project_id**: `test-project`
+- **Name**: `test-project`
 - **owner**: `unson`
 - **repo**: `slack-classify-bot`
 - **path_prefix**: `docs/`
+- **branch**: `main`
 
 ### レコード2
-- **project_id**: `meeting-notes`
+- **Name**: `meeting-notes`
 - **owner**: `unson`
 - **repo**: `slack-classify-bot`
 - **path_prefix**: `meetings/`
+- **branch**: `main`
 
 ### レコード3
-- **project_id**: `team-standup`
+- **Name**: `team-standup`
 - **owner**: `unson`
 - **repo**: `slack-classify-bot`
 - **path_prefix**: `standups/`
+- **branch**: `develop` (例：別ブランチの場合)
 
 ## 設定方法
 
 1. https://airtable.com/app9oeZUNRWZyaSdb/tblCPixx6xX2HODOl にアクセス
-2. 各レコードを上記の値で追加
-3. フィールドタイプが正しく設定されていることを確認
+2. 必要に応じて `branch` フィールドを手動で追加
+3. 各レコードを上記の値で設定
+4. フィールドタイプが正しく設定されていることを確認
 
 ## 重要なポイント
 
-- `project_id` はファイル名（.txt を除く）と完全一致する必要があります
+- **Name** フィールドはプライマリフィールドで、ファイル名（.txt を除く）と完全一致する必要があります
 - `path_prefix` は末尾に `/` を含めてください
-- `owner` と `repo` は実際に存在するGitHubリポジトリである必要があります 
+- `owner` と `repo` は実際に存在するGitHubリポジトリである必要があります
+- `branch` フィールドが設定されていない場合、デフォルトで `main` ブランチが使用されます
+- 異なるブランチを使用したい場合は、Airtableで `branch` フィールドを追加し、値を設定してください
+
+## ブランチ機能
+
+- **デフォルト動作**: `branch` フィールドがない場合は `main` ブランチに自動コミット
+- **カスタムブランチ**: `branch` フィールドで任意のブランチを指定可能
+- **プロジェクト別設定**: プロジェクトごとに異なるブランチを設定可能 
