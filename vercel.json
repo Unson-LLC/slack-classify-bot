@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "functions": {
+    "api/app.js": {
+      "memory": 1024
+    }
+  },
+  "rewrites": [
+    { "source": "/slack/events", "destination": "/api/app" },
+    { "source": "/slack/(.*)", "destination": "/api/app" }
+  ]
+} 

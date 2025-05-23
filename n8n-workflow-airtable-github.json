@@ -1,0 +1,385 @@
+{
+  "name": "Airtable 連携版 Slack to GitHub",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "/webhook/slack-airtable",
+        "options": {}
+      },
+      "id": "67890123-4567-890a-bcde-f0123456789a",
+      "name": "Slack Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "12345678-1234-5678-9abc-123456789abc",
+              "leftValue": "={{ $json.event && $json.event.files && $json.event.files[0] && $json.event.files[0].filetype }}",
+              "rightValue": "txt",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "23456789-3456-789a-bcde-f0123456789b",
+      "name": "Filter TXT Files",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.event.files[0].url_private }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "34567890-4567-890a-bcde-f0123456789c",
+      "name": "Download TXT File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        680,
+        180
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__SLACK_HEADER_AUTH__",
+          "name": "Slack Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract project_id from Slack event\nconst event = $input.first().json.event || {};\nconst channel = event.channel || '';\nconst user = event.user || '';\nconst fileName = event.files && event.files[0] ? event.files[0].name : '';\nconst ts = event.ts || '';\n\n// Try to extract project_id from file name or channel\n// Format expected: project_id should be in format like \"AITLE / your-org / aitile-docs / docs/meetings\"\nlet projectId = '';\n\n// Extract from filename (remove .txt extension)\nif (fileName.includes('.txt')) {\n  projectId = fileName.replace('.txt', '');\n}\n\n// If no project_id found, use a default or channel name\nif (!projectId) {\n  projectId = `default-project-${channel}`;\n}\n\nreturn {\n  json: {\n    project_id: projectId,\n    channel: channel,\n    user: user,\n    fileName: fileName,\n    ts: ts,\n    fileContent: $input.first().json.data || $input.first().json.body || ''\n  }\n};"
+      },
+      "id": "45678901-5678-901a-bcde-f0123456789d",
+      "name": "Extract Project Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "base": {
+          "__rl": true,
+          "value": "={{ $env.AIRTABLE_BASE }}",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "RepoMap",
+          "mode": "name"
+        },
+        "options": {
+          "filterByFormula": "={project_id} = \"{{ $json.project_id }}\""
+        }
+      },
+      "id": "56789012-6789-012a-bcde-f0123456789e",
+      "name": "Search Airtable RepoMap",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        180
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "__AIRTABLE_CRED__",
+          "name": "Airtable Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the repo mapping from Airtable\nconst projectInfo = $input.first().json;\nconst airtableRecords = $input.all()[1].json.records || [];\n\nlet repoConfig = {\n  owner: 'default-owner',\n  repo: 'default-repo', \n  path_prefix: 'docs/'\n};\n\n// If we found a matching record in Airtable, use it\nif (airtableRecords.length > 0) {\n  const record = airtableRecords[0].fields;\n  repoConfig = {\n    owner: record.owner || repoConfig.owner,\n    repo: record.repo || repoConfig.repo,\n    path_prefix: record.path_prefix || repoConfig.path_prefix\n  };\n}\n\n// Generate markdown content\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD\nconst timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS\n\nconst markdownContent = `# ${projectInfo.fileName}\n\n**Date:** ${dateStr}  \n**Time:** ${timeStr}  \n**Channel:** ${projectInfo.channel}  \n**User:** ${projectInfo.user}  \n**Project ID:** ${projectInfo.project_id}\n\n---\n\n${projectInfo.fileContent}\n\n---\n\n*Generated automatically from Slack via n8n*\n`;\n\n// Generate file path\nconst filePath = `${repoConfig.path_prefix}${dateStr}-${projectInfo.fileName.replace('.txt', '.md')}`;\n\nreturn {\n  json: {\n    owner: repoConfig.owner,\n    repo: repoConfig.repo,\n    filePath: filePath,\n    markdownContent: markdownContent,\n    commitMessage: `Add meeting notes: ${projectInfo.fileName} (${dateStr})`,\n    originalEvent: projectInfo\n  }\n};"
+      },
+      "id": "67890123-7890-123a-bcde-f0123456789f",
+      "name": "Generate Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "createOrUpdate",
+        "owner": {
+          "__rl": true,
+          "value": "={{ $json.owner }}",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "={{ $json.repo }}",
+          "mode": "name"
+        },
+        "filePath": "={{ $json.filePath }}",
+        "fileContent": "={{ $json.markdownContent }}",
+        "commitMessage": "={{ $json.commitMessage }}",
+        "additionalParameters": {
+          "branch": "main"
+        }
+      },
+      "id": "78901234-8901-234a-bcde-f01234567890",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        180
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "__GITHUB_CRED__",
+          "name": "GitHub PAT"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "post",
+        "channel": "={{ $json.originalEvent.channel }}",
+        "text": "✅ Markdown file successfully created and committed to GitHub!",
+        "otherOptions": {
+          "thread_ts": "={{ $json.originalEvent.ts }}"
+        }
+      },
+      "id": "89012345-9012-345a-bcde-f01234567891",
+      "name": "Reply to Slack Thread",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        180
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "__SLACK_API_CRED__",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"success\",\n  \"message\": \"File processed and committed to GitHub\",\n  \"data\": {\n    \"owner\": \"{{ $json.owner }}\",\n    \"repo\": \"{{ $json.repo }}\",\n    \"filePath\": \"{{ $json.filePath }}\",\n    \"commitMessage\": \"{{ $json.commitMessage }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "90123456-0123-456a-bcde-f01234567892",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.webhookResponse",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"ignored\",\n  \"message\": \"File type not supported (only .txt files are processed)\",\n  \"fileType\": \"{{ $json.event && $json.event.files && $json.event.files[0] ? $json.event.files[0].filetype : 'unknown' }}\"\n}",
+        "options": {}
+      },
+      "id": "01234567-1234-567a-bcde-f01234567893",
+      "name": "Webhook Response - Ignored",
+      "type": "n8n-nodes-base.webhookResponse",
+      "typeVersion": 1,
+      "position": [
+        680,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "post",
+        "channel": "={{ $json.originalEvent.channel }}",
+        "text": "❌ Error processing file. Please check the configuration.",
+        "otherOptions": {
+          "thread_ts": "={{ $json.originalEvent.ts }}"
+        }
+      },
+      "id": "12345678-2345-678a-bcde-f01234567894",
+      "name": "Error Reply to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        360
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "__SLACK_API_CRED__",
+          "name": "Slack API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Slack Webhook": {
+      "main": [
+        [
+          {
+            "node": "Filter TXT Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter TXT Files": {
+      "main": [
+        [
+          {
+            "node": "Download TXT File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Webhook Response - Ignored",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download TXT File": {
+      "main": [
+        [
+          {
+            "node": "Extract Project Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Project Info": {
+      "main": [
+        [
+          {
+            "node": "Search Airtable RepoMap",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Airtable RepoMap": {
+      "main": [
+        [
+          {
+            "node": "Generate Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Markdown": {
+      "main": [
+        [
+          {
+            "node": "Commit to GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit to GitHub": {
+      "main": [
+        [
+          {
+            "node": "Reply to Slack Thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Reply to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to Slack Thread": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": {
+      "id": "error-workflow"
+    }
+  },
+  "versionId": "12345678-1234-5678-9abc-123456789abc",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "12345678901234567890123456789012"
+  },
+  "id": "airtable-slack-github-workflow",
+  "tags": [
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "1",
+      "name": "airtable-integration"
+    },
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "2",
+      "name": "slack-github"
+    }
+  ]
+} 
