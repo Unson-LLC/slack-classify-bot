@@ -18,26 +18,33 @@
 
 ## サンプルデータ
 
-### レコード1
-- **Name**: `test-project`
-- **owner**: `unson`
-- **repo**: `slack-classify-bot`
-- **path_prefix**: `docs/`
-- **branch**: `main`
-
-### レコード2
-- **Name**: `meeting-notes`
-- **owner**: `unson`
-- **repo**: `slack-classify-bot`
+### レコード1: aitle
+- **Name**: `aitle`
+- **owner**: `Tech-Knight-inc`
+- **repo**: `aitle`
 - **path_prefix**: `meetings/`
-- **branch**: `main`
+- **branch**: `main` (デフォルト)
 
-### レコード3
-- **Name**: `team-standup`
-- **owner**: `unson`
-- **repo**: `slack-classify-bot`
-- **path_prefix**: `standups/`
-- **branch**: `develop` (例：別ブランチの場合)
+### レコード2: senrigan
+- **Name**: `senrigan`
+- **owner**: `Unson-LLC`
+- **repo**: `senrigan`
+- **path_prefix**: `meetings/`
+- **branch**: `main` (デフォルト)
+
+### レコード3: zeims
+- **Name**: `zeims`
+- **owner**: `Unson-LLC`
+- **repo**: `zeims`
+- **path_prefix**: `meetings/`
+- **branch**: `main` (デフォルト)
+
+### レコード4: postio
+- **Name**: `postio`
+- **owner**: `Unson-LLC`
+- **repo**: `Postio`
+- **path_prefix**: `meetings/`
+- **branch**: `main` (デフォルト)
 
 ## 設定方法
 
