@@ -92,11 +92,11 @@
         },
         "table": {
           "__rl": true,
-          "value": "RepoMap",
+          "value": "project_id",
           "mode": "name"
         },
         "options": {
-          "filterByFormula": "={project_id} = \"{{ $json.project_id }}\""
+          "filterByFormula": "={Name} = \"{{ $json.project_id }}\""
         }
       },
       "id": "56789012-6789-012a-bcde-f0123456789e",
