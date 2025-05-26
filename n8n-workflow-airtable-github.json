@@ -26,10 +26,10 @@
           "conditions": [
             {
               "id": "12345678-1234-5678-9abc-123456789abc",
-              "leftValue": "={{ $json.event && $json.event.files && $json.event.files[0] && $json.event.files[0].filetype }}",
-              "rightValue": "txt",
+              "leftValue": "={{ $json.body && $json.body.file && $json.body.file.name && $json.body.file.name.toLowerCase().endsWith('.txt') }}",
+              "rightValue": true,
               "operator": {
-                "type": "string",
+                "type": "boolean",
                 "operation": "equals"
               }
             }
@@ -49,81 +49,27 @@
     },
     {
       "parameters": {
-        "url": "={{ $json.event.files[0].url_private }}",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {}
-      },
-      "id": "34567890-4567-890a-bcde-f0123456789c",
-      "name": "Download TXT File",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        680,
-        180
-      ],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "__SLACK_HEADER_AUTH__",
-          "name": "Slack Header Auth"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// Extract project_id from Slack event\nconst event = $input.first().json.event || {};\nconst channel = event.channel || '';\nconst user = event.user || '';\nconst fileName = event.files && event.files[0] ? event.files[0].name : '';\nconst ts = event.ts || '';\n\n// Try to extract project_id from file name or channel\n// Format expected: project_id should be in format like \"AITLE / your-org / aitile-docs / docs/meetings\"\nlet projectId = '';\n\n// Extract from filename (remove .txt extension)\nif (fileName.includes('.txt')) {\n  projectId = fileName.replace('.txt', '');\n}\n\n// If no project_id found, use a default or channel name\nif (!projectId) {\n  projectId = `default-project-${channel}`;\n}\n\nreturn {\n  json: {\n    project_id: projectId,\n    channel: channel,\n    user: user,\n    fileName: fileName,\n    ts: ts,\n    fileContent: $input.first().json.data || $input.first().json.body || ''\n  }\n};"
+        "jsCode": "// Extract data from new Lambda function format\nconst body = $input.first().json.body || {};\nconst file = body.file || {};\nconst project = body.project || {};\n\n// Extract file and project information\nconst fileName = file.name || '';\nconst fileContent = file.content || '';\nconst channel = file.channel || '';\nconst user = file.uploaded_by || '';\nconst ts = file.timestamp || '';\n\n// Project information from Lambda\nconst projectId = project.id || '';\nconst projectName = project.name || '';\nconst owner = project.owner || 'default-owner';\nconst repo = project.repo || 'default-repo';\nconst pathPrefix = project.path_prefix || 'docs/';\nconst branch = project.branch || 'main';\n\nreturn {\n  json: {\n    fileName: fileName,\n    fileContent: fileContent,\n    channel: channel,\n    user: user,\n    ts: ts,\n    projectId: projectId,\n    projectName: projectName,\n    owner: owner,\n    repo: repo,\n    pathPrefix: pathPrefix,\n    branch: branch\n  }\n};"
       },
       "id": "45678901-5678-901a-bcde-f0123456789d",
       "name": "Extract Project Info",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        900,
+        680,
         180
       ]
     },
     {
       "parameters": {
-        "operation": "list",
-        "base": {
-          "__rl": true,
-          "value": "={{ $env.AIRTABLE_BASE }}",
-          "mode": "id"
-        },
-        "table": {
-          "__rl": true,
-          "value": "project_id",
-          "mode": "name"
-        },
-        "options": {
-          "filterByFormula": "={Name} = \"{{ $json.project_id }}\""
-        }
-      },
-      "id": "56789012-6789-012a-bcde-f0123456789e",
-      "name": "Search Airtable RepoMap",
-      "type": "n8n-nodes-base.airtable",
-      "typeVersion": 2,
-      "position": [
-        1120,
-        180
-      ],
-      "credentials": {
-        "airtableTokenApi": {
-          "id": "__AIRTABLE_CRED__",
-          "name": "Airtable Credentials"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// Get the repo mapping from Airtable\nconst projectInfo = $input.first().json;\nconst airtableRecords = $input.all()[1].json.records || [];\n\nlet repoConfig = {\n  owner: 'default-owner',\n  repo: 'default-repo', \n  path_prefix: 'docs/',\n  branch: 'main'  // デフォルトブランチ\n};\n\n// If we found a matching record in Airtable, use it\nif (airtableRecords.length > 0) {\n  const record = airtableRecords[0].fields;\n  repoConfig = {\n    owner: record.owner || repoConfig.owner,\n    repo: record.repo || repoConfig.repo,\n    path_prefix: record.path_prefix || repoConfig.path_prefix,\n    branch: record.branch || repoConfig.branch  // Airtableからブランチ情報を取得、なければデフォルト\n  };\n}\n\n// Generate markdown content\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD\nconst timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS\n\nconst markdownContent = `# ${projectInfo.fileName}\n\n**Date:** ${dateStr}  \n**Time:** ${timeStr}  \n**Channel:** ${projectInfo.channel}  \n**User:** ${projectInfo.user}  \n**Project ID:** ${projectInfo.project_id}\n\n---\n\n${projectInfo.fileContent}\n\n---\n\n*Generated automatically from Slack via n8n*\n`;\n\n// Generate file path\nconst filePath = `${repoConfig.path_prefix}${dateStr}-${projectInfo.fileName.replace('.txt', '.md')}`;\n\nreturn {\n  json: {\n    owner: repoConfig.owner,\n    repo: repoConfig.repo,\n    branch: repoConfig.branch,\n    filePath: filePath,\n    markdownContent: markdownContent,\n    commitMessage: `Add meeting notes: ${projectInfo.fileName} (${dateStr})`,\n    originalEvent: projectInfo\n  }\n};"
+        "jsCode": "// Generate markdown content from extracted data\nconst data = $input.first().json;\n\n// Generate markdown content\nconst now = new Date();\nconst dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD\nconst timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS\n\nconst markdownContent = `# ${data.fileName}\n\n**Date:** ${dateStr}  \n**Time:** ${timeStr}  \n**Channel:** ${data.channel}  \n**User:** ${data.user}  \n**Project:** ${data.projectName} (${data.projectId})\n\n---\n\n${data.fileContent}\n\n---\n\n*Generated automatically from Slack via n8n*\n`;\n\n// Generate file path\nconst filePath = `${data.pathPrefix}${dateStr}-${data.fileName.replace('.txt', '.md')}`;\n\nreturn {\n  json: {\n    owner: data.owner,\n    repo: data.repo,\n    branch: data.branch,\n    filePath: filePath,\n    markdownContent: markdownContent,\n    commitMessage: `Add meeting notes: ${data.fileName} (${dateStr})`,\n    originalEvent: {\n      channel: data.channel,\n      ts: data.ts,\n      fileName: data.fileName,\n      projectName: data.projectName\n    }\n  }\n};"
       },
       "id": "67890123-7890-123a-bcde-f0123456789f",
       "name": "Generate Markdown",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1340,
+        900,
         180
       ]
     },
@@ -153,7 +99,7 @@
       "type": "n8n-nodes-base.github",
       "typeVersion": 1,
       "position": [
-        1560,
+        1120,
         180
       ],
       "credentials": {
@@ -179,7 +125,7 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2,
       "position": [
-        1780,
+        1340,
         180
       ],
       "credentials": {
@@ -200,14 +146,14 @@
       "type": "n8n-nodes-base.webhookResponse",
       "typeVersion": 1,
       "position": [
-        2000,
+        1560,
         180
       ]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"status\": \"ignored\",\n  \"message\": \"File type not supported (only .txt files are processed)\",\n  \"fileType\": \"{{ $json.event && $json.event.files && $json.event.files[0] ? $json.event.files[0].filetype : 'unknown' }}\"\n}",
+        "responseBody": "={\n  \"status\": \"ignored\",\n  \"message\": \"File type not supported (only .txt files are processed)\",\n  \"fileName\": \"{{ $json.body && $json.body.file ? $json.body.file.name : 'unknown' }}\"\n}",
         "options": {}
       },
       "id": "01234567-1234-567a-bcde-f01234567893",
@@ -235,7 +181,7 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2,
       "position": [
-        1560,
+        1120,
         360
       ],
       "credentials": {
@@ -263,7 +209,7 @@
       "main": [
         [
           {
-            "node": "Download TXT File",
+            "node": "Extract Project Info",
             "type": "main",
             "index": 0
           }
@@ -277,29 +223,7 @@
         ]
       ]
     },
-    "Download TXT File": {
-      "main": [
-        [
-          {
-            "node": "Extract Project Info",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Extract Project Info": {
-      "main": [
-        [
-          {
-            "node": "Search Airtable RepoMap",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Search Airtable RepoMap": {
       "main": [
         [
           {
