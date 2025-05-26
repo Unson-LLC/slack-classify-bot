@@ -124,71 +124,77 @@ class AirtableIntegration {
   /**
    * Process file with selected project
    * @param {Object} params - Processing parameters
+   * @param {string} params.fileContent - File content
+   * @param {string} params.fileName - File name
+   * @param {string} params.projectId - Selected project ID
+   * @param {string} params.userId - User ID who uploaded the file
+   * @param {string} params.channelId - Channel ID
+   * @param {string} params.ts - Timestamp
    * @returns {Promise<Object>} - Processing result
    */
   async processFileWithProject({ fileContent, fileName, projectId, userId, channelId, ts }) {
     try {
-      // Get project details from Airtable
-      const projectResponse = await axios.get(
-        `https://api.airtable.com/v0/${this.airtableBase}/project_id/${projectId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.airtableToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      console.log(`Processing file ${fileName} with project ${projectId}`);
 
-      const project = projectResponse.data.fields;
+      // Get project details
+      const projects = await this.getProjects();
+      const selectedProject = projects.find(p => p.id === projectId);
+      
+      if (!selectedProject) {
+        throw new Error(`Project with ID ${projectId} not found`);
+      }
+
+      console.log('Selected project:', selectedProject);
 
       // Prepare payload for n8n workflow
       const payload = {
-        type: 'event_callback',
-        event: {
-          type: 'file_shared',
-          file_id: `manual_${Date.now()}`,
-          user: userId,
+        type: 'file_processing',
+        file: {
+          name: fileName,
+          content: fileContent,
+          uploaded_by: userId,
           channel: channelId,
-          ts: ts,
-          files: [{
-            name: fileName,
-            filetype: 'txt',
-            content: fileContent
-          }]
+          timestamp: ts
         },
         project: {
           id: projectId,
-          name: project.Name,
-          owner: project.owner,
-          repo: project.repo,
-          path_prefix: project.path_prefix,
-          branch: project.branch || 'main'
+          name: selectedProject.name,
+          owner: selectedProject.owner,
+          repo: selectedProject.repo,
+          path_prefix: selectedProject.path_prefix,
+          branch: selectedProject.branch || 'main'
         },
         timestamp: new Date().toISOString()
       };
 
+      console.log('Sending payload to n8n:', JSON.stringify(payload, null, 2));
+
+      // Send to n8n workflow
       const response = await axios.post(
-        `${this.n8nEndpoint}`,
+        this.n8nEndpoint,
         payload,
         {
           headers: {
             'Content-Type': 'application/json'
           },
-          timeout: 30000 // 30 seconds for file processing
+          timeout: 30000 // 30 seconds timeout for file processing
         }
       );
 
-      console.log('Successfully processed file with project:', response.data);
+      console.log('n8n response:', response.data);
+
       return {
         success: true,
-        data: response.data,
-        project: project
+        project: selectedProject,
+        n8nResponse: response.data
       };
+
     } catch (error) {
       console.error('Error processing file with project:', error.message);
       return {
         success: false,
-        error: error.message
+        error: error.message,
+        project: null
       };
     }
   }

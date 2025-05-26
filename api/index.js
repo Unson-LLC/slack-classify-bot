@@ -15,22 +15,33 @@ setInterval(() => {
   const now = Date.now();
   const thirtyMinutesAgo = now - (30 * 60 * 1000);
   
+  console.log('Starting cleanup process...');
+  console.log(`Current time: ${new Date(now).toISOString()}`);
+  console.log(`Cleanup threshold: ${new Date(thirtyMinutesAgo).toISOString()}`);
+  
   // Clean up old file data
+  let fileDataCleaned = 0;
   for (const [key, data] of fileDataStore.entries()) {
     if (data.timestamp && data.timestamp < thirtyMinutesAgo) {
       fileDataStore.delete(key);
+      fileDataCleaned++;
+      console.log(`Cleaned up old file data: ${key}`);
     }
   }
   
   // Clean up old processed file IDs (keep only last 1000)
+  let processedFilesCleaned = 0;
   if (processedFiles.size > 1000) {
     const entries = Array.from(processedFiles);
     const toKeep = entries.slice(-500); // Keep last 500
     processedFiles.clear();
     toKeep.forEach(id => processedFiles.add(id));
+    processedFilesCleaned = entries.length - toKeep.length;
+    console.log(`Cleaned up ${processedFilesCleaned} old processed file IDs`);
   }
   
   console.log(`Cleanup completed. FileDataStore: ${fileDataStore.size}, ProcessedFiles: ${processedFiles.size}`);
+  console.log(`Cleaned up: ${fileDataCleaned} file data entries, ${processedFilesCleaned} processed file IDs`);
 }, 30 * 60 * 1000); // 30 minutes
 
 // Initialize AWS Lambda receiver
@@ -38,11 +49,18 @@ const awsLambdaReceiver = new AwsLambdaReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
 });
 
+console.log('AWS Lambda receiver initialized');
+
 // Initialize Slack app with Lambda receiver
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   receiver: awsLambdaReceiver,
 });
+
+console.log('Slack Bolt app initialized');
+console.log('Environment check:');
+console.log('- SLACK_BOT_TOKEN length:', process.env.SLACK_BOT_TOKEN ? process.env.SLACK_BOT_TOKEN.length : 0);
+console.log('- SLACK_SIGNING_SECRET length:', process.env.SLACK_SIGNING_SECRET ? process.env.SLACK_SIGNING_SECRET.length : 0);
 
 // Message classification handler
 app.message(async ({ message, client, logger }) => {
@@ -91,10 +109,14 @@ app.message(async ({ message, client, logger }) => {
 // File upload handler with project selection
 app.event('file_shared', async ({ event, client, logger }) => {
   try {
-    logger.info('File shared event received:', event);
+    logger.info('File shared event received:', JSON.stringify(event, null, 2));
 
-    // Create unique identifier for this file event
-    const eventId = `${event.file_id}_${event.ts}`;
+    // Create unique identifier for this file event (include channel to prevent cross-channel duplicates)
+    const eventId = `${event.file_id}_${event.channel_id}_${event.ts}`;
+    
+    logger.info('Generated eventId:', eventId);
+    logger.info('Current processedFiles size:', processedFiles.size);
+    logger.info('ProcessedFiles contains eventId:', processedFiles.has(eventId));
     
     // Check if we've already processed this file event
     if (processedFiles.has(eventId)) {
@@ -102,8 +124,9 @@ app.event('file_shared', async ({ event, client, logger }) => {
       return;
     }
     
-    // Mark as processing
+    // Mark as processing immediately
     processedFiles.add(eventId);
+    logger.info('Added eventId to processedFiles:', eventId);
 
     // Get file info
     const fileInfo = await client.files.info({
@@ -111,10 +134,29 @@ app.event('file_shared', async ({ event, client, logger }) => {
     });
 
     const file = fileInfo.file;
+    logger.info('File info retrieved:', {
+      name: file.name,
+      filetype: file.filetype,
+      size: file.size
+    });
     
     // Only process .txt files
     if (file.filetype === 'txt' || file.name.endsWith('.txt')) {
       logger.info('Processing .txt file:', file.name);
+      
+      // Create unique file key for this specific upload event
+      const fileKey = `${event.file_id}_${event.channel_id}_${Date.now()}`;
+      logger.info('Generated fileKey:', fileKey);
+      
+      // Check if we already have a message for this file in this channel
+      const existingFileKey = Array.from(fileDataStore.keys()).find(key => 
+        key.startsWith(`${event.file_id}_${event.channel_id}_`)
+      );
+      
+      if (existingFileKey) {
+        logger.info('File already being processed in this channel, skipping:', existingFileKey);
+        return;
+      }
       
       // Download file content
       const response = await fetch(file.url_private, {
@@ -124,9 +166,9 @@ app.event('file_shared', async ({ event, client, logger }) => {
       });
       
       const content = await response.text();
+      logger.info('File content downloaded, length:', content.length);
       
       // Store file data temporarily
-      const fileKey = `${event.file_id}_${Date.now()}`;
       fileDataStore.set(fileKey, {
         fileName: file.name,
         content: content,
@@ -134,11 +176,15 @@ app.event('file_shared', async ({ event, client, logger }) => {
         channel: event.channel_id,
         ts: event.ts,
         fileId: event.file_id,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        eventId: eventId
       });
+      
+      logger.info('File data stored with key:', fileKey);
 
       // Get projects from Airtable
       const projects = await airtableIntegration.getProjects();
+      logger.info('Retrieved projects from Airtable:', projects.length);
       
       if (projects.length === 0) {
         await client.chat.postMessage({
@@ -151,22 +197,25 @@ app.event('file_shared', async ({ event, client, logger }) => {
       // Create interactive message with project selection buttons
       const blocks = airtableIntegration.createProjectSelectionBlocks(projects, fileKey);
       
-      await client.chat.postMessage({
+      const messageResult = await client.chat.postMessage({
         channel: event.channel_id,
         text: `📁 ファイル "${file.name}" がアップロードされました。`,
         blocks: blocks,
         thread_ts: event.ts
       });
+      
+      logger.info('Project selection message posted:', messageResult.ts);
 
     } else {
-      logger.info('Skipping non-txt file:', file.name);
+      logger.info('Skipping non-txt file:', file.name, 'filetype:', file.filetype);
     }
   } catch (error) {
     logger.error('Error in file processing:', error);
     
     // Remove from processed set on error so it can be retried
-    const eventId = `${event.file_id}_${event.ts}`;
+    const eventId = `${event.file_id}_${event.channel_id}_${event.ts}`;
     processedFiles.delete(eventId);
+    logger.info('Removed eventId from processedFiles due to error:', eventId);
     
     try {
       await client.chat.postMessage({
@@ -179,65 +228,100 @@ app.event('file_shared', async ({ event, client, logger }) => {
   }
 });
 
-// Handle project selection button clicks
-app.action(/^select_project_/, async ({ ack, body, client, action, logger }) => {
-  await ack();
-
+// Handle project selection button clicks - 複数のパターンで確実にキャッチ
+app.action(/^select_project_rec/, async ({ ack, body, client, action, logger }) => {
+  console.log('=== PROJECT SELECTION BUTTON HANDLER CALLED (rec pattern) ===');
+  console.log('Action ID:', action.action_id);
+  console.log('Action type:', action.type);
+  console.log('Action value:', action.value);
+  console.log('Body type:', body.type);
+  console.log('User ID:', body.user.id);
+  
   try {
+    await ack();
+    console.log('Action acknowledged successfully');
+    
+    logger.info('Project selection button clicked:', action.action_id);
+    logger.info('Action value:', action.value);
+
     const actionValue = JSON.parse(action.value);
     const { projectId, projectName, fileId } = actionValue;
+    
+    logger.info(`Processing project selection: ${projectName} (${projectId}) for file: ${fileId}`);
+    console.log(`Processing project selection: ${projectName} (${projectId}) for file: ${fileId}`);
     
     // Get stored file data
     const fileData = fileDataStore.get(fileId);
     if (!fileData) {
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        text: `❌ ファイルデータが見つかりません。再度アップロードしてください。`,
-        blocks: []
-      });
-      return;
+      logger.error('File data not found for fileId:', fileId);
+      console.error('File data not found for fileId:', fileId);
+      console.log('Available file data keys:', Array.from(fileDataStore.keys()));
+      
+      // Try to reconstruct file data from fileId
+      console.log('Attempting to reconstruct file data from fileId...');
+      try {
+        // Extract file ID from the composite fileId (format: F08TMQF3USK_C08SYTDR7R8_1748273406000)
+        const actualFileId = fileId.split('_')[0];
+        console.log('Extracted actual file ID:', actualFileId);
+        
+        // Get file info from Slack
+        const fileInfo = await client.files.info({
+          file: actualFileId
+        });
+        
+        const file = fileInfo.file;
+        console.log('Retrieved file info from Slack:', file.name);
+        
+        // Download file content
+        const response = await fetch(file.url_private, {
+          headers: {
+            'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+          }
+        });
+        
+        const content = await response.text();
+        console.log('Downloaded file content, length:', content.length);
+        
+        // Reconstruct file data
+        const reconstructedFileData = {
+          fileName: file.name,
+          content: content,
+          uploadedBy: body.user.id, // Use current user as uploader
+          channel: body.channel.id,
+          ts: body.message.ts,
+          fileId: actualFileId,
+          timestamp: Date.now(),
+          reconstructed: true
+        };
+        
+        console.log('Successfully reconstructed file data');
+        
+        // Continue with processing using reconstructed data
+        await processFileWithProject(reconstructedFileData, projectId, projectName, body, client, logger);
+        return;
+        
+      } catch (reconstructError) {
+        console.error('Failed to reconstruct file data:', reconstructError);
+        
+        await client.chat.update({
+          channel: body.channel.id,
+          ts: body.message.ts,
+          text: `❌ ファイルデータが見つかりません。ファイルを再度アップロードしてください。\n\nエラー詳細: ${reconstructError.message}`,
+          blocks: []
+        });
+        return;
+      }
     }
 
-    // Update message to show processing
-    await client.chat.update({
-      channel: body.channel.id,
-      ts: body.message.ts,
-      text: `🔄 プロジェクト "${projectName}" でファイル "${fileData.fileName}" を処理中...`,
-      blocks: []
-    });
+    logger.info('Found file data:', fileData.fileName);
+    console.log('Found file data:', fileData.fileName);
 
-    // Process file with selected project
-    const result = await airtableIntegration.processFileWithProject({
-      fileContent: fileData.content,
-      fileName: fileData.fileName,
-      projectId: projectId,
-      userId: fileData.uploadedBy,
-      channelId: fileData.channel,
-      ts: fileData.ts
-    });
-
-    // Clean up stored data
-    fileDataStore.delete(fileId);
-
-    if (result.success) {
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        text: `✅ ファイル "${fileData.fileName}" がプロジェクト "${projectName}" で正常に処理されました！\n\n📊 **プロジェクト情報:**\n• Owner: ${result.project.owner}\n• Repo: ${result.project.repo}\n• Path: ${result.project.path_prefix}\n• Branch: ${result.project.branch || 'main'}`,
-        blocks: []
-      });
-    } else {
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        text: `❌ ファイル処理に失敗しました: ${result.error}`,
-        blocks: []
-      });
-    }
-
+    // Process with existing file data
+    await processFileWithProject(fileData, projectId, projectName, body, client, logger);
   } catch (error) {
     logger.error('Error handling project selection:', error);
+    console.error('Error handling project selection:', error);
+    console.error('Error stack:', error.stack);
     
     try {
       await client.chat.update({
@@ -248,17 +332,52 @@ app.action(/^select_project_/, async ({ ack, body, client, action, logger }) => 
       });
     } catch (updateError) {
       logger.error('Error updating message:', updateError);
+      console.error('Error updating message:', updateError);
     }
+  }
+});
+
+// 追加のフォールバック - 具体的なaction_idでもキャッチ
+app.action('select_project_recIfNN51lp02Bd0x', async ({ ack, body, client, action, logger }) => {
+  console.log('=== POSTIO BUTTON HANDLER CALLED (specific ID) ===');
+  console.log('Action ID:', action.action_id);
+  
+  // このハンドラーではackしない（最初のハンドラーで既にackされている）
+  console.log('Postio button - skipping ack (already handled by first handler)');
+  
+  // 処理は最初のハンドラーに任せる
+  console.log('Processing delegated to first handler');
+});
+
+// 全てのボタンクリックをキャッチするフォールバック
+app.action(/.+/, async ({ ack, body, client, action, logger }) => {
+  console.log('=== FALLBACK ACTION HANDLER CALLED ===');
+  console.log('Action ID:', action.action_id);
+  console.log('Action type:', action.type);
+  console.log('Action value:', action.value);
+  
+  // postioボタンの場合は既に処理されているのでackのみ
+  if (action.action_id === 'select_project_recIfNN51lp02Bd0x') {
+    console.log('Fallback: postio button already processed by first handler');
+    // ackしない（既に最初のハンドラーでackされている）
+    return;
+  } else {
+    // その他のアクションの場合は通常通りack
+    await ack();
+    console.log('Fallback: Other action acknowledged:', action.action_id);
   }
 });
 
 // Handle cancel button click
 app.action('cancel_project_selection', async ({ ack, body, client, action, logger }) => {
-  await ack();
-
   try {
+    await ack();
+    logger.info('Cancel button clicked');
+
     const actionValue = JSON.parse(action.value);
     const { fileId } = actionValue;
+    
+    logger.info('Cancelling file processing for fileId:', fileId);
     
     // Clean up stored data
     fileDataStore.delete(fileId);
@@ -269,6 +388,8 @@ app.action('cancel_project_selection', async ({ ack, body, client, action, logge
       text: `❌ ファイル処理がキャンセルされました。`,
       blocks: []
     });
+
+    logger.info('Cancel message sent');
 
   } catch (error) {
     logger.error('Error handling cancel action:', error);
@@ -360,8 +481,17 @@ app.error(async (error) => {
 
 // Lambda handler
 exports.handler = async (event, context, callback) => {
-  console.log('Lambda function started');
+  console.log('=== LAMBDA FUNCTION STARTED ===');
+  console.log('Timestamp:', new Date().toISOString());
   console.log('Event:', JSON.stringify(event, null, 2));
+  console.log('Context:', JSON.stringify(context, null, 2));
+  
+  console.log('=== ENVIRONMENT VARIABLES CHECK ===');
+  console.log('- SLACK_BOT_TOKEN:', process.env.SLACK_BOT_TOKEN ? 'Set (length: ' + process.env.SLACK_BOT_TOKEN.length + ')' : 'Not set');
+  console.log('- SLACK_SIGNING_SECRET:', process.env.SLACK_SIGNING_SECRET ? 'Set (length: ' + process.env.SLACK_SIGNING_SECRET.length + ')' : 'Not set');
+  console.log('- N8N_AIRTABLE_ENDPOINT:', process.env.N8N_AIRTABLE_ENDPOINT ? 'Set' : 'Not set');
+  console.log('- AIRTABLE_BASE:', process.env.AIRTABLE_BASE ? 'Set' : 'Not set');
+  console.log('- AIRTABLE_TOKEN:', process.env.AIRTABLE_TOKEN ? 'Set' : 'Not set');
   
   try {
     // Handle Slack URL verification challenge (for initial setup)
@@ -372,7 +502,8 @@ exports.handler = async (event, context, callback) => {
         
         // Handle Slack URL verification challenge
         if (body.type === 'url_verification') {
-          console.log('URL verification challenge detected');
+          console.log('=== URL VERIFICATION CHALLENGE DETECTED ===');
+          console.log('Challenge:', body.challenge);
           return {
             statusCode: 200,
             headers: {
@@ -381,17 +512,149 @@ exports.handler = async (event, context, callback) => {
             body: body.challenge
           };
         }
+        
+        // Log interactive payload details
+        if (body.payload) {
+          console.log('=== INTERACTIVE PAYLOAD DETECTED ===');
+          const payload = JSON.parse(body.payload);
+          console.log('Payload type:', payload.type);
+          if (payload.actions && payload.actions.length > 0) {
+            console.log('Action details:', payload.actions[0]);
+            console.log('Action ID:', payload.actions[0].action_id);
+            console.log('Action value:', payload.actions[0].value);
+            
+            // 直接的なpostioボタン処理
+            if (payload.actions[0].action_id === 'select_project_recIfNN51lp02Bd0x') {
+              console.log('=== DIRECT POSTIO BUTTON PROCESSING ===');
+              
+              try {
+                const actionValue = JSON.parse(payload.actions[0].value);
+                const { projectId, projectName, fileId } = actionValue;
+                
+                console.log(`Direct processing postio: ${projectName} (${projectId}) for file: ${fileId}`);
+                
+                // Get stored file data
+                const fileData = fileDataStore.get(fileId);
+                if (!fileData) {
+                  console.error('Direct: File data not found for fileId:', fileId);
+                  console.log('Direct: Available file data keys:', Array.from(fileDataStore.keys()));
+                  
+                  // Return error response
+                  return {
+                    statusCode: 200,
+                    headers: {
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      response_type: 'ephemeral',
+                      text: '❌ ファイルデータが見つかりません。再度アップロードしてください。'
+                    })
+                  };
+                }
+
+                console.log('Direct: Found file data:', fileData.fileName);
+
+                // Process file with selected project
+                const result = await airtableIntegration.processFileWithProject({
+                  fileContent: fileData.content,
+                  fileName: fileData.fileName,
+                  projectId: projectId,
+                  userId: fileData.uploadedBy,
+                  channelId: fileData.channel,
+                  ts: fileData.ts
+                });
+
+                console.log('Direct: File processing result:', result);
+
+                // Clean up stored data
+                fileDataStore.delete(fileId);
+
+                if (result.success) {
+                  // Update message via response_url
+                  const updateResponse = await fetch(payload.response_url, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      response_type: 'in_channel',
+                      replace_original: true,
+                      text: `✅ ファイル "${fileData.fileName}" がプロジェクト "${projectName}" で正常に処理されました！\n\n📊 **プロジェクト情報:**\n• Owner: ${result.project.owner}\n• Repo: ${result.project.repo}\n• Path: ${result.project.path_prefix}\n• Branch: ${result.project.branch || 'main'}`
+                    })
+                  });
+                  
+                  console.log('Direct: Update response status:', updateResponse.status);
+                  console.log('Direct: Success message sent');
+                  
+                  return {
+                    statusCode: 200,
+                    headers: {
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      response_type: 'in_channel',
+                      replace_original: true,
+                      text: `✅ ファイル "${fileData.fileName}" がプロジェクト "${projectName}" で正常に処理されました！`
+                    })
+                  };
+                } else {
+                  console.error('Direct: File processing failed:', result.error);
+                  
+                  return {
+                    statusCode: 200,
+                    headers: {
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      response_type: 'in_channel',
+                      replace_original: true,
+                      text: `❌ ファイル処理に失敗しました: ${result.error}`
+                    })
+                  };
+                }
+
+              } catch (directError) {
+                console.error('Direct: Error handling postio project selection:', directError);
+                console.error('Direct: Error stack:', directError.stack);
+                
+                return {
+                  statusCode: 200,
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({
+                    response_type: 'ephemeral',
+                    text: `❌ プロジェクト選択の処理中にエラーが発生しました: ${directError.message}`
+                  })
+                };
+              }
+            }
+          }
+        }
       } catch (parseError) {
         console.error('Error parsing body for challenge check:', parseError);
       }
     }
     
+    console.log('=== PROCESSING THROUGH SLACK BOLT ===');
+    console.log('Slack Bolt app initialized:', !!app);
+    console.log('AWS Lambda receiver initialized:', !!awsLambdaReceiver);
+    
     // Handle normal Slack events through Bolt
     const handler = await awsLambdaReceiver.start();
-    return handler(event, context, callback);
+    console.log('Slack Bolt handler obtained');
+    
+    const result = await handler(event, context, callback);
+    console.log('Slack Bolt processing completed, result:', result);
+    
+    return result;
     
   } catch (error) {
-    console.error('Error in Lambda handler:', error);
+    console.error('=== ERROR IN LAMBDA HANDLER ===');
+    console.error('Error:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Error message:', error.message);
+    
     return {
       statusCode: 500,
       headers: {
@@ -404,4 +667,69 @@ exports.handler = async (event, context, callback) => {
       })
     };
   }
-}; 
+};
+
+// Helper function to process file with project
+async function processFileWithProject(fileData, projectId, projectName, body, client, logger) {
+  try {
+    // Update message to show processing
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      text: `🔄 プロジェクト "${projectName}" でファイル "${fileData.fileName}" を処理中...`,
+      blocks: []
+    });
+
+    logger.info('Updated message to show processing');
+    console.log('Updated message to show processing');
+
+    // Process file with selected project
+    const result = await airtableIntegration.processFileWithProject({
+      fileContent: fileData.content,
+      fileName: fileData.fileName,
+      projectId: projectId,
+      userId: fileData.uploadedBy,
+      channelId: fileData.channel,
+      ts: fileData.ts
+    });
+
+    logger.info('File processing result:', result);
+    console.log('File processing result:', result);
+
+    // Clean up stored data (only if not reconstructed)
+    if (!fileData.reconstructed) {
+      const fileId = `${fileData.fileId}_${fileData.channel}_${fileData.timestamp}`;
+      fileDataStore.delete(fileId);
+    }
+
+    if (result.success) {
+      await client.chat.update({
+        channel: body.channel.id,
+        ts: body.message.ts,
+        text: `✅ ファイル "${fileData.fileName}" がプロジェクト "${projectName}" で正常に処理されました！\n\n📊 **プロジェクト情報:**\n• Owner: ${result.project.owner}\n• Repo: ${result.project.repo}\n• Path: ${result.project.path_prefix}\n• Branch: ${result.project.branch || 'main'}`,
+        blocks: []
+      });
+      logger.info('Success message sent');
+      console.log('Success message sent');
+    } else {
+      await client.chat.update({
+        channel: body.channel.id,
+        ts: body.message.ts,
+        text: `❌ ファイル処理に失敗しました: ${result.error}`,
+        blocks: []
+      });
+      logger.error('File processing failed:', result.error);
+      console.error('File processing failed:', result.error);
+    }
+  } catch (error) {
+    logger.error('Error in processFileWithProject:', error);
+    console.error('Error in processFileWithProject:', error);
+    
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      text: `❌ ファイル処理中にエラーが発生しました: ${error.message}`,
+      blocks: []
+    });
+  }
+} 
