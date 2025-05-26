@@ -1,0 +1,33 @@
+{
+  "name": "slack-classify-bot-lambda",
+  "version": "1.0.0",
+  "description": "Slack bot for message classification and file processing using AWS Lambda",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "package": "zip -r lambda-deployment.zip . -x \"*.git*\" \"node_modules/.cache/*\" \"*.DS_Store*\"",
+    "deploy": "aws lambda update-function-code --function-name slack-classify-bot --zip-file fileb://lambda-deployment.zip"
+  },
+  "keywords": [
+    "slack",
+    "bot",
+    "lambda",
+    "aws",
+    "classification",
+    "n8n"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@slack/bolt": "^3.17.1",
+    "axios": "^1.6.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sintariran/slack-classify-bot.git"
+  }
+} 
