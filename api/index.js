@@ -64,12 +64,68 @@ console.log('- SLACK_SIGNING_SECRET length:', process.env.SLACK_SIGNING_SECRET ?
 
 // Message classification handler
 app.message(async ({ message, client, logger }) => {
+  // 必ずログを出力してハンドラーが呼ばれていることを確認
+  console.log('=== MESSAGE HANDLER CALLED ===');
+  console.log('Message type:', message.type);
+  console.log('Message subtype:', message.subtype);
+  console.log('Bot ID:', message.bot_id);
+  console.log('Bot profile:', message.bot_profile?.name);
+  console.log('Has blocks:', !!message.blocks);
+  console.log('Message text:', message.text);
+  
   try {
-    // Skip bot messages and messages without text
-    if (message.subtype === 'bot_message' || !message.text) {
+    // Skip bot messages, messages without text, and messages with blocks (interactive messages)
+    // Also skip messages from our own bot (Meeting Router)
+    // Skip file_share subtype messages (automatic file upload messages)
+    
+    // Check if message contains project selection blocks
+    const hasProjectSelectionBlocks = message.blocks && message.blocks.some(block => 
+      block.type === 'section' && 
+      block.text && 
+      block.text.text && 
+      block.text.text.includes('プロジェクトを選択してください')
+    );
+    
+    // Check if message has project selection buttons
+    const hasProjectButtons = message.blocks && message.blocks.some(block =>
+      block.type === 'actions' && 
+      block.elements && 
+      block.elements.some(element => 
+        element.action_id && element.action_id.startsWith('select_project_')
+      )
+    );
+    
+    console.log('hasProjectSelectionBlocks:', hasProjectSelectionBlocks);
+    console.log('hasProjectButtons:', hasProjectButtons);
+    
+    if (message.subtype === 'bot_message' || 
+        message.subtype === 'file_share' ||  // ファイルアップロード時の自動メッセージを除外
+        !message.text || 
+        message.bot_id || 
+        message.blocks || 
+        message.app_id ||
+        (message.bot_profile && message.bot_profile.name === 'Meeting Router') ||
+        message.text.includes('プロジェクトを選択してください') ||
+        hasProjectSelectionBlocks ||
+        hasProjectButtons) {
+      
+      console.log('=== SKIPPING MESSAGE ===');
+      logger.info('Skipping message:', {
+        subtype: message.subtype,
+        hasText: !!message.text,
+        botId: message.bot_id,
+        hasBlocks: !!message.blocks,
+        appId: message.app_id,
+        botProfileName: message.bot_profile?.name,
+        containsProjectSelection: message.text?.includes('プロジェクトを選択してください'),
+        hasProjectSelectionBlocks: hasProjectSelectionBlocks,
+        hasProjectButtons: hasProjectButtons,
+        isFileShare: message.subtype === 'file_share'
+      });
       return;
     }
 
+    console.log('=== PROCESSING MESSAGE FOR CLASSIFICATION ===');
     logger.info('Processing message for classification:', message.text);
 
     // Classify the message using n8n
@@ -102,6 +158,8 @@ app.message(async ({ message, client, logger }) => {
       });
     }
   } catch (error) {
+    console.error('=== ERROR IN MESSAGE HANDLER ===');
+    console.error('Error:', error);
     logger.error('Error in message classification:', error);
   }
 });
@@ -111,8 +169,9 @@ app.event('file_shared', async ({ event, client, logger }) => {
   try {
     logger.info('File shared event received:', JSON.stringify(event, null, 2));
 
-    // Create unique identifier for this file event (include channel to prevent cross-channel duplicates)
-    const eventId = `${event.file_id}_${event.channel_id}_${event.ts}`;
+    // Create unique identifier for this file event (file_id + channel_id only, no timestamp)
+    // This prevents duplicates even if event.ts varies slightly
+    const eventId = `${event.file_id}_${event.channel_id}`;
     
     logger.info('Generated eventId:', eventId);
     logger.info('Current processedFiles size:', processedFiles.size);
@@ -144,9 +203,10 @@ app.event('file_shared', async ({ event, client, logger }) => {
     if (file.filetype === 'txt' || file.name.endsWith('.txt')) {
       logger.info('Processing .txt file:', file.name);
       
-      // Create unique file key for this specific upload event
-      const fileKey = `${event.file_id}_${event.channel_id}_${Date.now()}`;
-      logger.info('Generated fileKey:', fileKey);
+      // Store file data for later retrieval during project selection
+      // Use consistent fileKey without timestamp to prevent duplicates
+      const fileKey = `${event.file_id}_${event.channel_id}`;
+      logger.info(`Generated fileKey: ${fileKey}`);
       
       // Check if we already have a message for this file in this channel
       const existingFileKey = Array.from(fileDataStore.keys()).find(key => 
@@ -213,7 +273,7 @@ app.event('file_shared', async ({ event, client, logger }) => {
     logger.error('Error in file processing:', error);
     
     // Remove from processed set on error so it can be retried
-    const eventId = `${event.file_id}_${event.channel_id}_${event.ts}`;
+    const eventId = `${event.file_id}_${event.channel_id}`;
     processedFiles.delete(eventId);
     logger.info('Removed eventId from processedFiles due to error:', eventId);
     
@@ -228,9 +288,9 @@ app.event('file_shared', async ({ event, client, logger }) => {
   }
 });
 
-// Handle project selection button clicks - 複数のパターンで確実にキャッチ
-app.action(/^select_project_rec/, async ({ ack, body, client, action, logger }) => {
-  console.log('=== PROJECT SELECTION BUTTON HANDLER CALLED (rec pattern) ===');
+// Handle project selection button clicks - 統一されたハンドラー
+app.action(/^select_project_/, async ({ ack, body, client, action, logger }) => {
+  console.log('=== PROJECT SELECTION BUTTON HANDLER CALLED ===');
   console.log('Action ID:', action.action_id);
   console.log('Action type:', action.type);
   console.log('Action value:', action.value);
@@ -238,6 +298,7 @@ app.action(/^select_project_rec/, async ({ ack, body, client, action, logger }) 
   console.log('User ID:', body.user.id);
   
   try {
+    // 最初にack()を呼び出す
     await ack();
     console.log('Action acknowledged successfully');
     
@@ -250,8 +311,25 @@ app.action(/^select_project_rec/, async ({ ack, body, client, action, logger }) 
     logger.info(`Processing project selection: ${projectName} (${projectId}) for file: ${fileId}`);
     console.log(`Processing project selection: ${projectName} (${projectId}) for file: ${fileId}`);
     
-    // Get stored file data
-    const fileData = fileDataStore.get(fileId);
+    // Try multiple possible file keys to find the stored data
+    const possibleKeys = [
+      fileId, // Original format
+      `${fileId.split('_')[0]}_${fileId.split('_')[1]}`, // Without timestamp
+      actionValue.fileId // From action value
+    ];
+    
+    let fileData = null;
+    let foundKey = null;
+    
+    for (const key of possibleKeys) {
+      if (fileDataStore.has(key)) {
+        fileData = fileDataStore.get(key);
+        foundKey = key;
+        logger.info(`Found file data with key: ${foundKey}`);
+        break;
+      }
+    }
+    
     if (!fileData) {
       logger.error('File data not found for fileId:', fileId);
       console.error('File data not found for fileId:', fileId);
@@ -337,34 +415,18 @@ app.action(/^select_project_rec/, async ({ ack, body, client, action, logger }) 
   }
 });
 
-// 追加のフォールバック - 具体的なaction_idでもキャッチ
-app.action('select_project_recIfNN51lp02Bd0x', async ({ ack, body, client, action, logger }) => {
-  console.log('=== POSTIO BUTTON HANDLER CALLED (specific ID) ===');
-  console.log('Action ID:', action.action_id);
-  
-  // このハンドラーではackしない（最初のハンドラーで既にackされている）
-  console.log('Postio button - skipping ack (already handled by first handler)');
-  
-  // 処理は最初のハンドラーに任せる
-  console.log('Processing delegated to first handler');
-});
-
-// 全てのボタンクリックをキャッチするフォールバック
+// 全てのボタンクリックをキャッチするフォールバック - 簡素化
 app.action(/.+/, async ({ ack, body, client, action, logger }) => {
   console.log('=== FALLBACK ACTION HANDLER CALLED ===');
   console.log('Action ID:', action.action_id);
   console.log('Action type:', action.type);
-  console.log('Action value:', action.value);
   
-  // postioボタンの場合は既に処理されているのでackのみ
-  if (action.action_id === 'select_project_recIfNN51lp02Bd0x') {
-    console.log('Fallback: postio button already processed by first handler');
-    // ackしない（既に最初のハンドラーでackされている）
-    return;
-  } else {
-    // その他のアクションの場合は通常通りack
+  // プロジェクト選択ボタンでない場合のみack
+  if (!action.action_id.startsWith('select_project_')) {
     await ack();
-    console.log('Fallback: Other action acknowledged:', action.action_id);
+    console.log('Fallback: Non-project action acknowledged:', action.action_id);
+  } else {
+    console.log('Fallback: Project selection action - skipping ack (handled by main handler)');
   }
 });
 
@@ -513,124 +575,29 @@ exports.handler = async (event, context, callback) => {
           };
         }
         
-        // Log interactive payload details
+        // Log interactive payload details for debugging
         if (body.payload) {
           console.log('=== INTERACTIVE PAYLOAD DETECTED ===');
           const payload = JSON.parse(body.payload);
           console.log('Payload type:', payload.type);
+          console.log('Full payload:', JSON.stringify(payload, null, 2));
           if (payload.actions && payload.actions.length > 0) {
             console.log('Action details:', payload.actions[0]);
             console.log('Action ID:', payload.actions[0].action_id);
             console.log('Action value:', payload.actions[0].value);
-            
-            // 直接的なpostioボタン処理
-            if (payload.actions[0].action_id === 'select_project_recIfNN51lp02Bd0x') {
-              console.log('=== DIRECT POSTIO BUTTON PROCESSING ===');
-              
-              try {
-                const actionValue = JSON.parse(payload.actions[0].value);
-                const { projectId, projectName, fileId } = actionValue;
-                
-                console.log(`Direct processing postio: ${projectName} (${projectId}) for file: ${fileId}`);
-                
-                // Get stored file data
-                const fileData = fileDataStore.get(fileId);
-                if (!fileData) {
-                  console.error('Direct: File data not found for fileId:', fileId);
-                  console.log('Direct: Available file data keys:', Array.from(fileDataStore.keys()));
-                  
-                  // Return error response
-                  return {
-                    statusCode: 200,
-                    headers: {
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                      response_type: 'ephemeral',
-                      text: '❌ ファイルデータが見つかりません。再度アップロードしてください。'
-                    })
-                  };
-                }
-
-                console.log('Direct: Found file data:', fileData.fileName);
-
-                // Process file with selected project
-                const result = await airtableIntegration.processFileWithProject({
-                  fileContent: fileData.content,
-                  fileName: fileData.fileName,
-                  projectId: projectId,
-                  userId: fileData.uploadedBy,
-                  channelId: fileData.channel,
-                  ts: fileData.ts
-                });
-
-                console.log('Direct: File processing result:', result);
-
-                // Clean up stored data
-                fileDataStore.delete(fileId);
-
-                if (result.success) {
-                  // Update message via response_url
-                  const updateResponse = await fetch(payload.response_url, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                      response_type: 'in_channel',
-                      replace_original: true,
-                      text: `✅ ファイル "${fileData.fileName}" がプロジェクト "${projectName}" で正常に処理されました！\n\n📊 **プロジェクト情報:**\n• Owner: ${result.project.owner}\n• Repo: ${result.project.repo}\n• Path: ${result.project.path_prefix}\n• Branch: ${result.project.branch || 'main'}`
-                    })
-                  });
-                  
-                  console.log('Direct: Update response status:', updateResponse.status);
-                  console.log('Direct: Success message sent');
-                  
-                  return {
-                    statusCode: 200,
-                    headers: {
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                      response_type: 'in_channel',
-                      replace_original: true,
-                      text: `✅ ファイル "${fileData.fileName}" がプロジェクト "${projectName}" で正常に処理されました！`
-                    })
-                  };
-                } else {
-                  console.error('Direct: File processing failed:', result.error);
-                  
-                  return {
-                    statusCode: 200,
-                    headers: {
-                      'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                      response_type: 'in_channel',
-                      replace_original: true,
-                      text: `❌ ファイル処理に失敗しました: ${result.error}`
-                    })
-                  };
-                }
-
-              } catch (directError) {
-                console.error('Direct: Error handling postio project selection:', directError);
-                console.error('Direct: Error stack:', directError.stack);
-                
-                return {
-                  statusCode: 200,
-                  headers: {
-                    'Content-Type': 'application/json'
-                  },
-                  body: JSON.stringify({
-                    response_type: 'ephemeral',
-                    text: `❌ プロジェクト選択の処理中にエラーが発生しました: ${directError.message}`
-                  })
-                };
-              }
-            }
           }
         }
+        
+        // Log all event types for debugging
+        console.log('=== EVENT TYPE ANALYSIS ===');
+        console.log('Body type:', body.type);
+        console.log('Has payload:', !!body.payload);
+        console.log('Has event:', !!body.event);
+        if (body.event) {
+          console.log('Event type:', body.event.type);
+          console.log('Event subtype:', body.event.subtype);
+        }
+        
       } catch (parseError) {
         console.error('Error parsing body for challenge check:', parseError);
       }

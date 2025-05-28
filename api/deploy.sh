@@ -33,11 +33,11 @@ if ! aws sts get-caller-identity &> /dev/null; then
 fi
 
 # Check if required environment variables are set
-if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_SIGNING_SECRET" ] || [ -z "$N8N_ENDPOINT" ]; then
+if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_SIGNING_SECRET" ] || [ -z "$N8N_AIRTABLE_ENDPOINT" ]; then
     echo -e "${YELLOW}⚠️  Environment variables not set. Please set:${NC}"
     echo "export SLACK_BOT_TOKEN=xoxb-your-bot-token"
     echo "export SLACK_SIGNING_SECRET=your-signing-secret"
-    echo "export N8N_ENDPOINT=https://your-n8n-instance.com"
+    echo "export N8N_AIRTABLE_ENDPOINT=https://your-n8n-instance.com"
     echo ""
     echo -e "${YELLOW}You can also set these directly in the Lambda function after deployment.${NC}"
 fi
@@ -74,14 +74,14 @@ if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION &> /d
         --region $REGION
     
     # Update function configuration if environment variables are set
-    if [ ! -z "$SLACK_BOT_TOKEN" ] && [ ! -z "$SLACK_SIGNING_SECRET" ] && [ ! -z "$N8N_ENDPOINT" ]; then
+    if [ ! -z "$SLACK_BOT_TOKEN" ] && [ ! -z "$SLACK_SIGNING_SECRET" ] && [ ! -z "$N8N_AIRTABLE_ENDPOINT" ]; then
         echo -e "${GREEN}🔧 Updating environment variables...${NC}"
         aws lambda update-function-configuration \
             --function-name $FUNCTION_NAME \
             --environment Variables="{
                 \"SLACK_BOT_TOKEN\":\"$SLACK_BOT_TOKEN\",
                 \"SLACK_SIGNING_SECRET\":\"$SLACK_SIGNING_SECRET\",
-                \"N8N_ENDPOINT\":\"$N8N_ENDPOINT\"
+                \"N8N_AIRTABLE_ENDPOINT\":\"$N8N_AIRTABLE_ENDPOINT\"
             }" \
             --region $REGION
     fi
@@ -138,11 +138,11 @@ EOF
     
     # Create Lambda function
     ENV_VARS="{}"
-    if [ ! -z "$SLACK_BOT_TOKEN" ] && [ ! -z "$SLACK_SIGNING_SECRET" ] && [ ! -z "$N8N_ENDPOINT" ]; then
+    if [ ! -z "$SLACK_BOT_TOKEN" ] && [ ! -z "$SLACK_SIGNING_SECRET" ] && [ ! -z "$N8N_AIRTABLE_ENDPOINT" ]; then
         ENV_VARS="{
             \"SLACK_BOT_TOKEN\":\"$SLACK_BOT_TOKEN\",
             \"SLACK_SIGNING_SECRET\":\"$SLACK_SIGNING_SECRET\",
-            \"N8N_ENDPOINT\":\"$N8N_ENDPOINT\"
+            \"N8N_AIRTABLE_ENDPOINT\":\"$N8N_AIRTABLE_ENDPOINT\"
         }"
     fi
     
@@ -224,6 +224,6 @@ echo "1. Configure your Slack app Event Subscriptions URL: $FUNCTION_URL"
 echo "2. Set up Slash Commands to point to: $FUNCTION_URL"
 echo "3. Test your bot in Slack!"
 echo ""
-if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_SIGNING_SECRET" ] || [ -z "$N8N_ENDPOINT" ]; then
+if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_SIGNING_SECRET" ] || [ -z "$N8N_AIRTABLE_ENDPOINT" ]; then
     echo -e "${YELLOW}⚠️  Don't forget to set environment variables in the Lambda console if not set already.${NC}"
 fi 
