@@ -64,67 +64,82 @@ console.log('- SLACK_SIGNING_SECRET length:', process.env.SLACK_SIGNING_SECRET ?
 
 // Message classification handler
 app.message(async ({ message, client, logger }) => {
-  // 必ずログを出力してハンドラーが呼ばれていることを確認
   console.log('=== MESSAGE HANDLER CALLED ===');
-  console.log('Message type:', message.type);
-  console.log('Message subtype:', message.subtype);
-  console.log('Bot ID:', message.bot_id);
-  console.log('Bot profile:', message.bot_profile?.name);
-  console.log('Has blocks:', !!message.blocks);
-  console.log('Message text:', message.text);
-  
-  try {
-    // Skip bot messages, messages without text, and messages with blocks (interactive messages)
-    // Also skip messages from our own bot (Meeting Router)
-    // Skip file_share subtype messages (automatic file upload messages)
-    
-    // Check if message contains project selection blocks
-    const hasProjectSelectionBlocks = message.blocks && message.blocks.some(block => 
-      block.type === 'section' && 
-      block.text && 
-      block.text.text && 
-      block.text.text.includes('プロジェクトを選択してください')
-    );
-    
-    // Check if message has project selection buttons
-    const hasProjectButtons = message.blocks && message.blocks.some(block =>
-      block.type === 'actions' && 
-      block.elements && 
-      block.elements.some(element => 
-        element.action_id && element.action_id.startsWith('select_project_')
-      )
-    );
-    
-    console.log('hasProjectSelectionBlocks:', hasProjectSelectionBlocks);
-    console.log('hasProjectButtons:', hasProjectButtons);
-    
-    if (message.subtype === 'bot_message' || 
-        message.subtype === 'file_share' ||  // ファイルアップロード時の自動メッセージを除外
-        !message.text || 
-        message.bot_id || 
-        message.blocks || 
-        message.app_id ||
-        (message.bot_profile && message.bot_profile.name === 'Meeting Router') ||
-        message.text.includes('プロジェクトを選択してください') ||
-        hasProjectSelectionBlocks ||
-        hasProjectButtons) {
-      
-      console.log('=== SKIPPING MESSAGE ===');
-      logger.info('Skipping message:', {
-        subtype: message.subtype,
-        hasText: !!message.text,
-        botId: message.bot_id,
-        hasBlocks: !!message.blocks,
-        appId: message.app_id,
-        botProfileName: message.bot_profile?.name,
-        containsProjectSelection: message.text?.includes('プロジェクトを選択してください'),
-        hasProjectSelectionBlocks: hasProjectSelectionBlocks,
-        hasProjectButtons: hasProjectButtons,
-        isFileShare: message.subtype === 'file_share'
-      });
-      return;
-    }
+  console.log(`Message type: ${message.type}`);
+  console.log(`Message subtype: ${message.subtype}`);
+  console.log(`Bot ID: ${message.bot_id}`);
+  console.log(`Bot profile: ${message.bot_profile}`);
+  console.log(`Has blocks: ${!!message.blocks}`);
+  console.log(`Message text: ${message.text}`);
+  console.log(`Has files: ${!!message.files}`);
+  console.log(`Files count: ${message.files ? message.files.length : 0}`);
 
+  // Check for project selection blocks and buttons
+  const hasProjectSelectionBlocks = message.blocks && message.blocks.some(block => 
+    block.type === 'section' && 
+    block.text && 
+    block.text.text && 
+    block.text.text.includes('プロジェクトを選択してください')
+  );
+  
+  const hasProjectButtons = message.blocks && message.blocks.some(block => 
+    block.type === 'actions' && 
+    block.elements && 
+    block.elements.some(element => 
+      element.action_id && element.action_id.startsWith('select_project_')
+    )
+  );
+
+  console.log(`hasProjectSelectionBlocks: ${hasProjectSelectionBlocks}`);
+  console.log(`hasProjectButtons: ${hasProjectButtons}`);
+
+  // Skip bot messages (including our own messages)
+  if (message.bot_id || message.app_id || (message.bot_profile && message.bot_profile.id)) {
+    console.log('=== SKIPPING BOT MESSAGE ===');
+    console.log(`[INFO]  bolt-app Skipping bot message: {
+  botId: ${message.bot_id},
+  appId: ${message.app_id},
+  botProfileId: ${message.bot_profile ? message.bot_profile.id : 'undefined'},
+  hasBlocks: ${!!message.blocks},
+  hasProjectSelectionBlocks: ${hasProjectSelectionBlocks},
+  hasProjectButtons: ${hasProjectButtons}
+}`);
+    return;
+  }
+
+  // Skip messages with files or file-related subtypes
+  if (message.files || message.subtype === 'file_share' || message.subtype === 'file_comment') {
+    console.log('=== SKIPPING MESSAGE ===');
+    console.log(`[INFO]  bolt-app Skipping message: {
+  subtype: '${message.subtype}',
+  hasText: ${!!message.text},
+  botId: ${message.bot_id},
+  hasBlocks: ${!!message.blocks},
+  appId: ${message.app_id},
+  botProfileName: ${message.bot_profile ? message.bot_profile.name : 'undefined'},
+  containsProjectSelection: ${hasProjectSelectionBlocks || hasProjectButtons},
+  hasProjectSelectionBlocks: ${hasProjectSelectionBlocks},
+  hasProjectButtons: ${hasProjectButtons},
+  isFileShare: ${message.subtype === 'file_share'},
+  hasFiles: ${!!message.files},
+  filesCount: ${message.files ? message.files.length : 0}
+}`);
+    return;
+  }
+
+  // Skip messages that contain project selection UI
+  if (hasProjectSelectionBlocks || hasProjectButtons) {
+    console.log('=== SKIPPING PROJECT SELECTION MESSAGE ===');
+    console.log(`[INFO]  bolt-app Skipping project selection message: {
+  hasProjectSelectionBlocks: ${hasProjectSelectionBlocks},
+  hasProjectButtons: ${hasProjectButtons},
+  botId: ${message.bot_id},
+  appId: ${message.app_id}
+}`);
+    return;
+  }
+
+  try {
     console.log('=== PROCESSING MESSAGE FOR CLASSIFICATION ===');
     logger.info('Processing message for classification:', message.text);
 
@@ -208,9 +223,15 @@ app.event('file_shared', async ({ event, client, logger }) => {
       const fileKey = `${event.file_id}_${event.channel_id}`;
       logger.info(`Generated fileKey: ${fileKey}`);
       
-      // Check if we already have a message for this file in this channel
+      // Check if we already have data for this file in this channel
+      if (fileDataStore.has(fileKey)) {
+        logger.info('File data already exists for this key, skipping:', fileKey);
+        return;
+      }
+      
+      // Check if we already have a message for this file in this channel (legacy check)
       const existingFileKey = Array.from(fileDataStore.keys()).find(key => 
-        key.startsWith(`${event.file_id}_${event.channel_id}_`)
+        key.startsWith(`${event.file_id}_${event.channel_id}`)
       );
       
       if (existingFileKey) {
@@ -670,10 +691,11 @@ async function processFileWithProject(fileData, projectId, projectName, body, cl
     }
 
     if (result.success) {
+      const projectEmoji = result.project.emoji || '📁';
       await client.chat.update({
         channel: body.channel.id,
         ts: body.message.ts,
-        text: `✅ ファイル "${fileData.fileName}" がプロジェクト "${projectName}" で正常に処理されました！\n\n📊 **プロジェクト情報:**\n• Owner: ${result.project.owner}\n• Repo: ${result.project.repo}\n• Path: ${result.project.path_prefix}\n• Branch: ${result.project.branch || 'main'}`,
+        text: `✅ ファイル "${fileData.fileName}" が ${projectEmoji} プロジェクト "${projectName}" で正常に処理されました！\n\n📊 **プロジェクト情報:**\n• 🏢 Owner: ${result.project.owner}\n• 📦 Repo: ${result.project.repo}\n• 📂 Path: ${result.project.path_prefix}\n• 🌿 Branch: ${result.project.branch || 'main'}`,
         blocks: []
       });
       logger.info('Success message sent');

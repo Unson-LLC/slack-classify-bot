@@ -30,7 +30,8 @@ class AirtableIntegration {
         owner: record.fields.owner,
         repo: record.fields.repo,
         path_prefix: record.fields.path_prefix,
-        description: record.fields.description || ''
+        description: record.fields.description || '',
+        emoji: record.fields.emoji || '📁' // デフォルト絵文字
       }));
 
       console.log(`Found ${projects.length} projects in Airtable`);
@@ -53,7 +54,7 @@ class AirtableIntegration {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "📁 *プロジェクトを選択してください*\n\nアップロードされたファイルをどのプロジェクトに関連付けますか？"
+          text: "🎯 *プロジェクトを選択してください* 🎯\n\n📂 アップロードされたファイルをどのプロジェクトに関連付けますか？\n各プロジェクトの絵文字を参考にしてください！"
         }
       },
       {
@@ -71,7 +72,7 @@ class AirtableIntegration {
           type: "button",
           text: {
             type: "plain_text",
-            text: `${project.name}`,
+            text: `${project.emoji} ${project.name}`,
             emoji: true
           },
           value: JSON.stringify({
