@@ -40,37 +40,6 @@ class N8nIntegration {
   }
 
   /**
-   * Classify Slack message content
-   * @param {string} text - The message text
-   * @returns {string} - Classification category
-   */
-  classifyMessage(text) {
-    if (!text) return 'general';
-    
-    const lowerText = text.toLowerCase();
-    
-    if (lowerText.includes('bug') || lowerText.includes('issue') || lowerText.includes('error')) {
-      return 'bug';
-    } else if (lowerText.includes('feature') || lowerText.includes('request') || lowerText.includes('enhancement')) {
-      return 'feature-request';
-    } else if (lowerText.includes('question') || lowerText.includes('help') || lowerText.includes('how')) {
-      return 'question';
-    } else if (lowerText.includes('feedback') || lowerText.includes('suggestion')) {
-      return 'feedback';
-    } else if (lowerText.includes('urgent') || lowerText.includes('critical') || lowerText.includes('emergency')) {
-      return 'urgent';
-    } else if (lowerText.includes('performance') || lowerText.includes('slow') || lowerText.includes('optimization')) {
-      return 'performance';
-    } else if (lowerText.includes('security') || lowerText.includes('vulnerability') || lowerText.includes('breach')) {
-      return 'security';
-    } else if (lowerText.includes('documentation') || lowerText.includes('docs') || lowerText.includes('readme')) {
-      return 'documentation';
-    }
-    
-    return 'general';
-  }
-
-  /**
    * Send analytics data to n8n
    * @param {Object} analyticsData - Analytics data
    * @returns {Promise<Object>} - Response from n8n
@@ -102,4 +71,39 @@ class N8nIntegration {
   }
 }
 
-module.exports = N8nIntegration; 
+/**
+ * Classify Slack message content
+ * @param {string} text - The message text
+ * @returns {string} - Classification category
+ */
+function classifyMessage(text) {
+  if (!text) return { category: 'general', confidence: 0.5 };
+  
+  const lowerText = text.toLowerCase();
+  
+  const rules = [
+    { category: 'urgent', keywords: ['urgent', 'critical', 'emergency', 'asap'], confidence: 0.9 },
+    { category: 'bug', keywords: ['bug', 'issue', 'error', 'fail', 'broken'], confidence: 0.8 },
+    { category: 'feature-request', keywords: ['feature', 'request', 'enhancement', 'idea'], confidence: 0.7 },
+    { category: 'question', keywords: ['question', 'help', 'how', 'what', 'why'], confidence: 0.7 },
+    { category: 'feedback', keywords: ['feedback', 'suggestion', 'opinion'], confidence: 0.6 },
+    { category: 'performance', keywords: ['performance', 'slow', 'optimization'], confidence: 0.8 },
+    { category: 'security', keywords: ['security', 'vulnerability', 'breach'], confidence: 0.9 },
+    { category: 'documentation', keywords: ['documentation', 'docs', 'readme', 'help'], confidence: 0.7 }
+  ];
+
+  for (const rule of rules) {
+    for (const keyword of rule.keywords) {
+      if (lowerText.includes(keyword)) {
+        return { category: rule.category, confidence: rule.confidence };
+      }
+    }
+  }
+  
+  return { category: 'general', confidence: 0.5 };
+}
+
+module.exports = {
+  N8nIntegration,
+  classifyMessage
+}; 
