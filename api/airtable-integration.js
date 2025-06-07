@@ -95,12 +95,11 @@ class AirtableIntegration {
           type: "button",
           text: {
             type: "plain_text",
-            text: "❌ キャンセル",
+            text: "閉じる",
             emoji: true
           },
           value: JSON.stringify({ fileId: fileId }),
-          action_id: "cancel_project_selection",
-          style: "danger"
+          action_id: "cancel_project_selection"
         }
       ]
     });

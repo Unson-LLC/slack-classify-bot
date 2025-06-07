@@ -424,37 +424,28 @@ app.action(/.+/, async ({ ack, body, client, action, logger }) => {
 });
 
 // Handle cancel button click
-app.action('cancel_project_selection', async ({ ack, body, client, action, logger }) => {
-  // 最初にack()を呼び出して即座にSlackに応答
-  await ack();
-  logger.info('Cancel button acknowledged');
-
-  // 非同期で実際の処理を実行
-  setImmediate(async () => {
-    try {
-      logger.info('Cancel button clicked');
-
-      const actionValue = JSON.parse(action.value);
-      const { fileId } = actionValue;
-      
-      logger.info('Cancelling file processing for fileId:', fileId);
-      
-      // Clean up stored data
-      fileDataStore.delete(fileId);
-
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        text: `❌ ファイル処理がキャンセルされました。`,
-        blocks: []
-      });
-
-      logger.info('Cancel message sent');
-
-    } catch (error) {
-      logger.error('Error handling cancel action:', error);
+app.action('cancel_project_selection', async ({ ack, body, client, logger }) => {
+  try {
+    await ack();
+    logger.info('Cancel button clicked');
+    // メッセージを削除
+    await client.chat.delete({
+      channel: body.channel.id,
+      ts: body.message.ts,
+    });
+    logger.info('Project selection message deleted.');
+    
+    // 関連するファイル処理の情報をクリア（もしあれば）
+    if (body.message.blocks) {
+      const fileId = body.message.blocks[1]?.block_id;
+      if (fileId && fileDataStore.has(fileId)) {
+        fileDataStore.delete(fileId);
+        logger.info(`Cleared file data for fileId: ${fileId}`);
+      }
     }
-  });
+  } catch (error) {
+    logger.error('Error in cancel_project_selection:', error);
+  }
 });
 
 // Slash command: /classify
