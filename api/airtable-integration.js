@@ -410,11 +410,13 @@ class AirtableIntegration {
       
       // Try to get file content from fileDataStore or re-download it
       let fileContent = null;
+      let summary = null;
       try {
         // First try fileDataStore
         const fileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${channelId}`);
         if (fileData && fileData.content) {
           fileContent = fileData.content;
+          summary = fileData.summary; // Get stored summary if available
           logger.info('File content retrieved from store');
         } else {
           // If not in store, re-download the file
@@ -466,6 +468,13 @@ class AirtableIntegration {
       // Create formatted filename: YYYY-MM-DD_meaningful-name.md
       const formattedFileName = `${dateStr}_${aiGeneratedName}.md`;
       
+      // Create formatted content with summary at the top
+      let formattedContent = fileContent;
+      if (summary) {
+        // Prepend summary to the content
+        formattedContent = `# 議事録: ${aiGeneratedName}\n\n${summary}\n\n---\n\n## 議事録原文\n\n${fileContent}`;
+      }
+      
       // Prepare payload for n8n workflow
       const n8nPayload = {
         type: 'file_processing',
@@ -474,7 +483,9 @@ class AirtableIntegration {
           name: fileName,
           formattedName: formattedFileName,  // Add formatted filename
           channel: channelId,
-          content: fileContent  // Include the actual file content
+          content: formattedContent,  // Include formatted content with summary
+          originalContent: fileContent,  // Keep original content too
+          summary: summary  // Include summary separately
         },
         project: {
           id: projectId,
