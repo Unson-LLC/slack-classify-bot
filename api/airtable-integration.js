@@ -608,9 +608,18 @@ class AirtableIntegration {
         type: "divider"
       });
 
-      // Send confirmation blocks to the channel
+      // Get thread timestamp from file data store
+      let threadTs = null;
+      const fileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${channelId}`);
+      if (fileData && fileData.threadTs) {
+        threadTs = fileData.threadTs;
+        logger.info(`Using thread timestamp: ${threadTs}`);
+      }
+      
+      // Send confirmation blocks to the thread
       await client.chat.postMessage({
         channel: channelId,
+        thread_ts: threadTs, // Post in the same thread as the original file
         blocks: confirmationBlocks,
         text: `ファイルをn8nワークフローに送信しました: ${fileName} → ${projectName}`
       });
