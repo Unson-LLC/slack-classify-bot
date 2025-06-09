@@ -27,5 +27,30 @@ yarn-error.log*
 .env.test.local
 .env.production.local 
 .vercel
+
+# Terraform files
 terraform/.terraform/
 terraform/terraform.tfstate*
+terraform/*.tfplan
+
+# Build artifacts
+*.zip
+
+# Environment configuration files
+env-*.json
+
+# Temporary test files
+test-*.json
+test_*.json
+
+# AWS credentials and policies
+*-policy.json
+trust-policy.json
+
+# Lambda response files
+lambda-response.json
+
+# Temporary files
+*.tmp
+*.temp
+*~

@@ -62,7 +62,9 @@
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 SLACK_SIGNING_SECRET=your-signing-secret
 N8N_ENDPOINT=https://your-n8n-instance.com
-AIRTABLE_BASE=appXXXXXXXXXXXXXX
+AIRTABLE_BASE_ID=appXXXXXXXXXXXXXX
+AIRTABLE_API_KEY=pat...
+AIRTABLE_TABLE_NAME=Projects
 ```
 
 ### 3. Slackアプリ設定
@@ -96,7 +98,7 @@ mpim:history
 1. n8nで新しいワークフローを作成
 2. `n8n-workflow-airtable-github.json`をインポート
 3. 上記のクレデンシャルを設定
-4. 環境変数`AIRTABLE_BASE`を設定
+4. 環境変数`AIRTABLE_BASE_ID`を設定
 5. ワークフローをアクティブ化
 
 ## 📁 プロジェクト構造

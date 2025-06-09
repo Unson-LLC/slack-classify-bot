@@ -1,10 +1,15 @@
 const axios = require('axios');
+const Airtable = require('airtable');
 
 class AirtableIntegration {
-  constructor(n8nEndpoint) {
-    this.n8nEndpoint = n8nEndpoint;
-    this.airtableBase = process.env.AIRTABLE_BASE;
-    this.airtableToken = process.env.AIRTABLE_TOKEN;
+  constructor() {
+    if (!process.env.AIRTABLE_TOKEN || !process.env.AIRTABLE_BASE) {
+      throw new Error("Airtable API Key or Base ID is not configured in environment variables.");
+    }
+    this.airtable = new Airtable({ apiKey: process.env.AIRTABLE_TOKEN }).base(
+      process.env.AIRTABLE_BASE
+    );
+    this.tableName = process.env.AIRTABLE_TABLE_NAME || 'Projects';
   }
 
   /**
@@ -14,10 +19,10 @@ class AirtableIntegration {
   async getProjects() {
     try {
       const response = await axios.get(
-        `https://api.airtable.com/v0/${this.airtableBase}/project_id`,
+        `https://api.airtable.com/v0/${this.airtable.base}/project_id`,
         {
           headers: {
-            'Authorization': `Bearer ${this.airtableToken}`,
+            'Authorization': `Bearer ${this.airtable.apiKey}`,
             'Content-Type': 'application/json'
           },
           timeout: 10000
@@ -48,7 +53,7 @@ class AirtableIntegration {
    * @param {string} fileId - Slack file ID
    * @returns {Object} - Slack blocks for interactive message
    */
-  createProjectSelectionBlocks(projects, fileId) {
+  createProjectSelectionBlocks(projects, fileId, fileData) {
     const blocks = [
       {
         type: "section",
@@ -78,7 +83,10 @@ class AirtableIntegration {
           value: JSON.stringify({
             projectId: project.id,
             projectName: project.name,
-            fileId: fileId
+            fileId: fileId,
+            fileName: fileData.fileName,
+            channelId: fileData.channelId,
+            classificationResult: fileData.classificationResult
           }),
           action_id: `select_project_${project.id}`,
           style: "primary"
@@ -330,6 +338,161 @@ class AirtableIntegration {
     } catch (error) {
       console.error('Error getting file status:', error.message);
       throw error;
+    }
+  }
+
+  // Method to get the list of projects from Airtable
+  async getProjectList(logger) {
+    try {
+      logger.info(`Fetching projects from Airtable table: ${this.tableName}`);
+      const records = await this.airtable(this.tableName).select({
+        // すべてのフィールドを取得してデバッグ
+        maxRecords: 100,
+        view: 'Grid view'
+      }).all();
+
+      if (!records || records.length === 0) {
+        logger.warn('No projects found in Airtable.');
+        return [];
+      }
+
+      // デバッグ用：最初のレコードのフィールドを確認
+      if (records.length > 0) {
+        logger.info('First record fields:', Object.keys(records[0].fields));
+        logger.info('First record data:', records[0].fields);
+      }
+
+      const projectOptions = records.map(record => ({
+        text: record.get('Name') || record.id,
+        value: record.id,  // AirtableのレコードIDを使用
+      }));
+
+      return projectOptions;
+    } catch (error) {
+      console.error('Error fetching project list from Airtable:', error.message);
+      logger.error('Airtable error details:', {
+        statusCode: error.statusCode,
+        error: error.error,
+        message: error.message,
+        tableName: this.tableName,
+        baseId: process.env.AIRTABLE_BASE
+      });
+      return [];
+    }
+  }
+
+  // Method to process the file with the selected project
+  async processFileWithProject(action, body, client, logger, fileDataStore) {
+    logger.info('processFileWithProject called with action.value:', action.value);
+    
+    const actionData = JSON.parse(action.value);
+    const { projectId, projectName, fileId, fileName, classificationResult, channelId } = actionData;
+    const originalMessageTs = body.message.ts;
+
+    logger.info('Parsed action data:', actionData);
+
+    if (!projectId) {
+      logger.error('Project ID is not provided');
+      return;
+    }
+
+    try {
+      // Find the Airtable record for the selected project
+      // projectIdはAirtableのレコードIDなので、直接取得
+      const projectRecord = await this.airtable(this.tableName).find(projectId);
+
+      if (!projectRecord) {
+        throw new Error(`Project with ID ${projectId} not found in Airtable.`);
+      }
+
+      // Get project details from Airtable
+      const projectFields = projectRecord.fields;
+      
+      // Prepare payload for n8n workflow
+      const n8nPayload = {
+        type: 'file_processing',
+        file: {
+          id: fileId,
+          name: fileName,
+          channel: channelId
+        },
+        project: {
+          id: projectId,
+          name: projectName,
+          owner: projectFields.owner,
+          repo: projectFields.repo,
+          path_prefix: projectFields.path_prefix,
+          branch: projectFields.branch || 'main'
+        },
+        classification: classificationResult,
+        timestamp: new Date().toISOString()
+      };
+
+      logger.info('Sending to n8n workflow:', n8nPayload);
+
+      // Send to n8n workflow
+      const n8nEndpoint = process.env.N8N_AIRTABLE_ENDPOINT || process.env.N8N_ENDPOINT;
+      let n8nResponse = null;
+      
+      try {
+        const response = await axios.post(
+          `${n8nEndpoint}/slack-airtable`,
+          n8nPayload,
+          {
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            timeout: 30000
+          }
+        );
+        n8nResponse = response.data;
+        logger.info('n8n workflow response:', n8nResponse);
+      } catch (n8nError) {
+        logger.error('Failed to send to n8n workflow:', n8nError.message);
+        logger.info('n8n endpoint attempted:', `${n8nEndpoint}/slack-airtable`);
+        // Continue execution even if n8n fails
+      }
+
+      // Update the original Slack message to show confirmation
+      const statusEmoji = n8nResponse ? '✅' : '⚠️';
+      const statusText = n8nResponse 
+        ? 'ファイルをn8nワークフローに送信しました！' 
+        : 'プロジェクトを選択しました（n8nへの送信は失敗しました）';
+      
+      const confirmationBlocks = [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `${statusEmoji} ${statusText}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${projectFields.owner}/${projectFields.repo}\n📁 保存先: ${projectFields.path_prefix}`
+          }
+        },
+        {
+          type: "divider"
+        }
+      ];
+
+      // Send confirmation blocks to the channel
+      await client.chat.postMessage({
+        channel: channelId,
+        blocks: confirmationBlocks,
+        text: `ファイルをn8nワークフローに送信しました: ${fileName} → ${projectName}`
+      });
+    } catch (error) {
+      logger.error('Error updating Airtable or Slack:', error);
+      // Try to send an ephemeral message to the user on failure
+      try {
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: body.user.id,
+          text: `n8nワークフローへの送信中にエラーが発生しました: ${error.message}`,
+        });
+      } catch (ephemeralError) {
+        logger.error('Failed to send ephemeral error message:', ephemeralError);
+      }
+    } finally {
+      // Clean up the in-memory store (not needed anymore since we don't use it)
+      // fileDataStore.delete(originalMessageTs);
     }
   }
 }

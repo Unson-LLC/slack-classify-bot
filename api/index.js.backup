@@ -1,0 +1,95 @@
+const { App, AwsLambdaReceiver } = require('@slack/bolt');
+const fs = require('fs');
+const path = require('path');
+const { LambdaClient } = require('@aws-sdk/client-lambda');
+
+// Local dependencies
+const llmIntegration = require('./llm-integration');
+const AirtableIntegration = require('./airtable-integration');
+const airtableIntegration = new AirtableIntegration();
+
+// In-memory store for file data
+const fileDataStore = new Map();
+
+// --- Version Logging ---
+let version = 'unknown';
+try {
+  version = fs.readFileSync(path.join(__dirname, 'version.txt'), 'utf8').trim();
+} catch (e) {
+  console.log('Could not read version.txt file.');
+}
+console.log(`---slack-classify-bot--- Version: ${version}`);
+
+// Lambdaクライアントを明示的に初期化
+const lambdaClient = new LambdaClient({
+  region: process.env.AWS_REGION,
+});
+
+// AwsLambdaReceiverを初期化し、カスタムのLambdaクライアントを渡す
+const receiver = new AwsLambdaReceiver({
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+// Initialize Bolt app with receiver
+const app = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  receiver: awsLambdaReceiver,
+  processBeforeResponse: true,
+});
+
+// --- Event Handlers ---
+
+// File Upload Event
+app.message(async ({ message, client, logger }) => {
+  // We only care about 'file_share' events from users (not bots)
+  if (message.subtype === 'file_share' && !message.bot_id) {
+    logger.info(`Processing file upload for file: ${message.files[0].id}`);
+    if (!message.files || message.files.length === 0) {
+      logger.warn('File share event, but no files found.');
+      return;
+    }
+    try {
+      await llmIntegration.processFileUpload(message, client, logger, fileDataStore);
+    } catch (error) {
+      logger.error('Error in processFileUpload async call:', error);
+    }
+  }
+});
+
+// Project Selection Button Click
+app.action(/select_project_button_.*/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('--- Project Selection Button Clicked ---');
+  try {
+    await airtableIntegration.processFileWithProject(action, body, client, logger, fileDataStore);
+  } catch (error) {
+    logger.error('Error processing project selection:', error);
+  }
+});
+
+// Update Record Button Click
+app.action('update_airtable_record', async ({ ack, body, client, logger }) => {
+    await ack();
+    logger.info('--- Update Airtable Record Button Clicked ---');
+    try {
+        const projectOptions = await airtableIntegration.getProjectList(logger);
+        const newBlocks = airtableIntegration.buildProjectSelectionBlocks(
+            'プロジェクトを再選択してください:',
+            projectOptions,
+            body.message.ts
+        );
+        await client.chat.update({
+            channel: body.channel.id,
+            ts: body.message.ts,
+            blocks: newBlocks,
+            text: 'プロジェクトを再選択してください。',
+        });
+    } catch (error) {
+        logger.error('Failed to handle update_airtable_record action:', error);
+    }
+});
+
+// --- Lambda Handler ---
+// This is the standard handler format for Bolt on AWS Lambda.
+module.exports.handler = async (event, context, callback) => {
+  const handler = await awsLambdaReceiver.start();
+  return handler(event, context, callback);
+}; 
