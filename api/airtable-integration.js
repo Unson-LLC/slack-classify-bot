@@ -19,10 +19,10 @@ class AirtableIntegration {
   async getProjects() {
     try {
       const response = await axios.get(
-        `https://api.airtable.com/v0/${this.airtable.base}/project_id`,
+        `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE}/project_id`,
         {
           headers: {
-            'Authorization': `Bearer ${this.airtable.apiKey}`,
+            'Authorization': `Bearer ${process.env.AIRTABLE_TOKEN}`,
             'Content-Type': 'application/json'
           },
           timeout: 10000
@@ -439,12 +439,40 @@ class AirtableIntegration {
         logger.error('Failed to get file content:', error);
       }
       
+      // Generate a formatted filename for GitHub
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      // Get a meaningful filename from AI based on transcript content
+      let aiGeneratedName = '';
+      if (fileContent) {
+        try {
+          const { generateFilename } = require('./llm-integration');
+          aiGeneratedName = await generateFilename(fileContent);
+          if (aiGeneratedName) {
+            logger.info(`AI generated filename: ${aiGeneratedName}`);
+          }
+        } catch (error) {
+          logger.error('Failed to generate filename with AI:', error);
+        }
+      }
+      
+      // If AI couldn't generate a good name, use original filename
+      if (!aiGeneratedName) {
+        const baseFileName = fileName.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9-_]/g, '_');
+        aiGeneratedName = baseFileName;
+      }
+      
+      // Create formatted filename: YYYY-MM-DD_meaningful-name.md
+      const formattedFileName = `${dateStr}_${aiGeneratedName}.md`;
+      
       // Prepare payload for n8n workflow
       const n8nPayload = {
         type: 'file_processing',
         file: {
           id: fileId,
           name: fileName,
+          formattedName: formattedFileName,  // Add formatted filename
           channel: channelId,
           content: fileContent  // Include the actual file content
         },
@@ -486,19 +514,59 @@ class AirtableIntegration {
       }
 
       // Update the original Slack message to show confirmation
-      const isSuccess = n8nResponse && n8nResponse.status === 'success';
+      // Check for both new format (status: success) and old format (message: Workflow was started)
+      const isWorkflowStarted = n8nResponse && (n8nResponse.message === 'Workflow was started' || n8nResponse.message === 'workflow started');
+      const isSuccess = n8nResponse && (n8nResponse.status === 'success' || isWorkflowStarted);
       const statusEmoji = isSuccess ? '✅' : '⚠️';
       let statusText = '';
       let additionalInfo = '';
       
-      if (isSuccess && n8nResponse.data) {
-        // n8n returned successful response with GitHub data
+      // Check if we got a detailed response with GitHub info
+      if (n8nResponse && n8nResponse.data && n8nResponse.status === 'success') {
+        // Check if data contains actual values or template expressions
+        const hasTemplateExpressions = n8nResponse.data.owner && n8nResponse.data.owner.includes('{{');
+        
+        if (!hasTemplateExpressions && n8nResponse.data.owner && n8nResponse.data.repo) {
+          // Real data from n8n
+          const githubUrl = n8nResponse.data.commitUrl || 
+            `https://github.com/${n8nResponse.data.owner}/${n8nResponse.data.repo}/blob/${projectFields.branch || 'main'}/${n8nResponse.data.filePath}`;
+          
+          statusText = 'ファイルをGitHubにコミットしました！';
+          additionalInfo = `\n\n📄 GitHubに保存されました:\n• <${githubUrl}|${n8nResponse.data.filePath || formattedFileName}>`;
+          
+          if (n8nResponse.data.commitMessage) {
+            additionalInfo += `\n💬 ${n8nResponse.data.commitMessage}`;
+          }
+        } else {
+          // n8n returned template expressions - show success but warn about configuration
+          statusText = 'ファイルをGitHubに送信しました！';
+          additionalInfo = '\n\n⚠️ n8nのWebhookレスポンス設定を確認してください（テンプレート変数が評価されていません）';
+          logger.warn('n8n returned unevaluated template expressions:', n8nResponse.data);
+        }
+      } else if (n8nResponse && n8nResponse.github && n8nResponse.github.commit) {
+        // Old format with GitHub info
+        const githubInfo = n8nResponse.github;
+        const commitUrl = `https://github.com/${githubInfo.owner}/${githubInfo.repo}/commit/${githubInfo.commit.sha}`;
+        const fileUrl = `https://github.com/${githubInfo.owner}/${githubInfo.repo}/blob/${githubInfo.commit.sha}/${githubInfo.file_path}`;
+        
         statusText = 'ファイルをGitHubにコミットしました！';
-        // Construct GitHub URL from the data
-        const githubUrl = `https://github.com/${n8nResponse.data.owner}/${n8nResponse.data.repo}/blob/${projectFields.branch || 'main'}/${n8nResponse.data.filePath}`;
-        additionalInfo = `\n🔗 <${githubUrl}|GitHubで確認>`;
+        additionalInfo = `\n\n📄 GitHubに保存されました:\n• <${fileUrl}|${githubInfo.file_path}>\n• <${commitUrl}|コミット: ${githubInfo.commit.sha.substring(0, 7)}>`;
+      } else if (n8nResponse && n8nResponse.error) {
+        // Handle error responses from n8n
+        logger.error('n8n returned error:', n8nResponse.error);
+        statusText = 'GitHubへの保存中にエラーが発生しました';
+        additionalInfo = `\n\n⚠️ エラー: ${n8nResponse.error.message || 'Unknown error'}`;
+        if (n8nResponse.error.details) {
+          additionalInfo += `\n詳細: ${n8nResponse.error.details}`;
+        }
+      } else if (isWorkflowStarted) {
+        // n8n returned old format but workflow started successfully
+        statusText = 'ファイルをn8nワークフローに送信しました！';
+        // Construct estimated GitHub URL
+        const estimatedGithubUrl = `https://github.com/${projectFields.owner}/${projectFields.repo}/tree/${projectFields.branch || 'main'}/${projectFields.path_prefix}`;
+        additionalInfo = `\n🔗 <${estimatedGithubUrl}|GitHubリポジトリを確認>`;
       } else if (n8nResponse) {
-        // n8n returned but with error or different format
+        // n8n returned but with error or unknown format
         statusText = n8nResponse.message || 'ファイルをn8nワークフローに送信しました！';
       } else {
         statusText = 'プロジェクトを選択しました（n8nへの送信は失敗しました）';
@@ -509,7 +577,7 @@ class AirtableIntegration {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${statusEmoji} ${statusText}${additionalInfo}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${projectFields.owner}/${projectFields.repo}\n📁 保存先: ${n8nResponse?.data?.filePath || projectFields.path_prefix + fileName}`
+            text: `${statusEmoji} ${statusText}${additionalInfo}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${projectFields.owner}/${projectFields.repo}\n📁 保存先: ${n8nResponse?.data?.filePath || projectFields.path_prefix + formattedFileName}`
           }
         }
       ];

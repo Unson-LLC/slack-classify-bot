@@ -94,4 +94,81 @@ ${truncatedText}
   }
 }
 
-module.exports = { summarizeText }; 
+/**
+ * Generate a meaningful filename from transcript content
+ * @param {string} text - The transcript text
+ * @returns {Promise<string|null>} - Generated filename or null on error
+ */
+async function generateFilename(text) {
+  if (!text || text.trim() === "") {
+    return null;
+  }
+
+  // Take first 2000 chars for filename generation
+  const truncatedText = text.length > 2000 ? text.substring(0, 2000) : text;
+
+  const modelId = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+  
+  const prompt = `以下の会議議事録の内容から、GitHubに保存する際の短いファイル名を生成してください。
+
+# 要件
+- 内容を表す簡潔な名前（3-5単語程度）
+- 英語で、全て小文字
+- 単語間はハイフン（-）で接続
+- 特殊文字や記号は使用しない
+- 例: "weekly-team-standup", "product-roadmap-review", "client-meeting-abc-corp"
+
+# 議事録（冒頭部分）
+${truncatedText}
+
+ファイル名のみを返してください（拡張子や日付は不要）。`;
+
+  const payload = {
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: 100,
+    messages: [{
+      role: "user",
+      content: [{
+        type: "text",
+        text: prompt
+      }]
+    }]
+  };
+
+  const requestClient = new BedrockRuntimeClient({
+    region: BEDROCK_REGION,
+    endpoint: `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com`,
+    credentials: undefined
+  });
+
+  const command = new InvokeModelCommand({
+    contentType: "application/json",
+    body: JSON.stringify(payload),
+    modelId,
+  });
+
+  try {
+    const apiResponse = await requestClient.send(command);
+    const decoded = new TextDecoder().decode(apiResponse.body);
+    const responseBody = JSON.parse(decoded);
+    
+    if (responseBody.content && responseBody.content.length > 0) {
+      // Clean the generated filename
+      const filename = responseBody.content[0].text
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .substring(0, 50); // Max 50 chars
+      
+      return filename || null;
+    }
+    return null;
+  } catch (error) {
+    console.error("Error generating filename with Bedrock:", error);
+    return null;
+  }
+}
+
+module.exports = { summarizeText, generateFilename }; 

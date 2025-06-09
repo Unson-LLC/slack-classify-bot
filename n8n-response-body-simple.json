@@ -1,0 +1,11 @@
+{
+  "status": "success",
+  "message": "File processed and committed to GitHub",
+  "data": {
+    "owner": "={{$json.project.owner}}",
+    "repo": "={{$json.project.repo}}",
+    "filePath": "={{$json.project.path_prefix}}{{$json.file.formattedName}}",
+    "commitMessage": "Add meeting transcript",
+    "commitUrl": "https://github.com/{{$json.project.owner}}/{{$json.project.repo}}/blob/main/{{$json.project.path_prefix}}{{$json.file.formattedName}}"
+  }
+}

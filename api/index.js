@@ -67,6 +67,7 @@ console.log('- N8N_ENDPOINT:', process.env.N8N_ENDPOINT ? 'Loaded' : 'Missing');
 console.log('- N8N_AIRTABLE_ENDPOINT:', process.env.N8N_AIRTABLE_ENDPOINT ? 'Loaded' : 'Missing');
 console.log('- AIRTABLE_BASE:', process.env.AIRTABLE_BASE ? 'Loaded' : 'Missing');
 console.log('- AIRTABLE_TOKEN:', process.env.AIRTABLE_TOKEN ? 'Loaded' : 'Missing');
+console.log('- SLACK_BOT_ID:', process.env.SLACK_BOT_ID ? process.env.SLACK_BOT_ID : 'Missing');
 console.log('--------------------------');
 
 // --- Event Handlers ---
@@ -82,8 +83,11 @@ app.message(async ({ message, client, logger, event }) => {
     logger.info(`Current processed events cache size: ${processedEvents.size}`);
   }
   
-  // We only care about 'file_share' events from users (not bots)
-  if (message.subtype === 'file_share' && !message.bot_id) {
+  // We only care about 'file_share' events from users or automation bots
+  // Exclude our own bot responses if SLACK_BOT_ID is properly configured
+  const isOurBot = process.env.SLACK_BOT_ID && process.env.SLACK_BOT_ID !== 'YOUR_BOT_ID_HERE' && message.bot_id === process.env.SLACK_BOT_ID;
+  
+  if (message.subtype === 'file_share' && !isOurBot) {
     if (!message.files || message.files.length === 0) {
       logger.warn('File share event, but no files found.');
       return;
@@ -140,11 +144,12 @@ app.action('update_airtable_record', async ({ ack, body, client, logger }) => {
   logger.info('--- Update Airtable Record Button Clicked ---');
   try {
     const airtableIntegration = new AirtableIntegration();
-    const projectOptions = await airtableIntegration.getProjectList(logger);
-    const newBlocks = airtableIntegration.buildProjectSelectionBlocks(
-      'プロジェクトを再選択してください:',
-      projectOptions,
-      body.message.ts
+    const projects = await airtableIntegration.getProjects();
+    const fileData = { fileName: 'unknown', channelId: body.channel.id, classificationResult: {} };
+    const newBlocks = airtableIntegration.createProjectSelectionBlocks(
+      projects,
+      body.message.ts,
+      fileData
     );
     await client.chat.update({
       channel: body.channel.id,

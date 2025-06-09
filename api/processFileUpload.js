@@ -67,7 +67,7 @@ async function processFileUpload(message, client, logger, fileDataStore) {
     logger.info(`File data stored for: ${fileId}`);
     
     // Get project list from Airtable
-    const projects = await airtableIntegration.getProjectList(logger);
+    const projects = await airtableIntegration.getProjects();
     
     if (!projects || projects.length === 0) {
       await client.chat.postMessage({
@@ -78,60 +78,10 @@ async function processFileUpload(message, client, logger, fileDataStore) {
       return;
     }
     
-    // Build project selection buttons
-    const blocks = [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `📄 *${fileName}* がアップロードされました。\nプロジェクトを選択してください:`
-        }
-      },
-      {
-        type: "actions",
-        elements: projects.slice(0, 5).map(project => ({
-          type: "button",
-          text: {
-            type: "plain_text",
-            text: project.text,
-            emoji: true
-          },
-          value: JSON.stringify({
-            projectId: project.value,
-            projectName: project.text,
-            fileId: fileId,
-            fileName: fileName,
-            channelId: channelId,
-            classificationResult: { summary: `File uploaded: ${fileName}` }
-          }),
-          action_id: `select_project_${project.value}`
-        }))
-      }
-    ];
+    // Content is already set in fileData
     
-    // Add more buttons if there are more projects
-    if (projects.length > 5) {
-      blocks.push({
-        type: "actions",
-        elements: projects.slice(5, 10).map(project => ({
-          type: "button",
-          text: {
-            type: "plain_text",
-            text: project.text,
-            emoji: true
-          },
-          value: JSON.stringify({
-            projectId: project.value,
-            projectName: project.text,
-            fileId: fileId,
-            fileName: fileName,
-            channelId: channelId,
-            classificationResult: { summary: `File uploaded: ${fileName}` }
-          }),
-          action_id: `select_project_${project.value}`
-        }))
-      });
-    }
+    // Use the existing createProjectSelectionBlocks method
+    const blocks = airtableIntegration.createProjectSelectionBlocks(projects, fileId, fileData);
     
     // Post project selection message
     const response = await client.chat.postMessage({
