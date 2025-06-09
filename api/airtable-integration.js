@@ -408,13 +408,45 @@ class AirtableIntegration {
       // Get project details from Airtable
       const projectFields = projectRecord.fields;
       
+      // Try to get file content from fileDataStore or re-download it
+      let fileContent = null;
+      try {
+        // First try fileDataStore
+        const fileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${channelId}`);
+        if (fileData && fileData.content) {
+          fileContent = fileData.content;
+          logger.info('File content retrieved from store');
+        } else {
+          // If not in store, re-download the file
+          logger.info('File not in store, re-downloading from Slack');
+          const fileInfo = await client.files.info({ file: fileId });
+          
+          if (fileInfo.file.content) {
+            fileContent = fileInfo.file.content;
+          } else if (fileInfo.file.url_private_download) {
+            const axios = require('axios');
+            const response = await axios.get(fileInfo.file.url_private_download, {
+              headers: {
+                'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`
+              },
+              responseType: 'text'
+            });
+            fileContent = response.data;
+          }
+          logger.info('File content re-downloaded successfully');
+        }
+      } catch (error) {
+        logger.error('Failed to get file content:', error);
+      }
+      
       // Prepare payload for n8n workflow
       const n8nPayload = {
         type: 'file_processing',
         file: {
           id: fileId,
           name: fileName,
-          channel: channelId
+          channel: channelId,
+          content: fileContent  // Include the actual file content
         },
         project: {
           id: projectId,
@@ -454,23 +486,48 @@ class AirtableIntegration {
       }
 
       // Update the original Slack message to show confirmation
-      const statusEmoji = n8nResponse ? '✅' : '⚠️';
-      const statusText = n8nResponse 
-        ? 'ファイルをn8nワークフローに送信しました！' 
-        : 'プロジェクトを選択しました（n8nへの送信は失敗しました）';
+      const isSuccess = n8nResponse && n8nResponse.status === 'success';
+      const statusEmoji = isSuccess ? '✅' : '⚠️';
+      let statusText = '';
+      let additionalInfo = '';
+      
+      if (isSuccess && n8nResponse.data) {
+        // n8n returned successful response with GitHub data
+        statusText = 'ファイルをGitHubにコミットしました！';
+        // Construct GitHub URL from the data
+        const githubUrl = `https://github.com/${n8nResponse.data.owner}/${n8nResponse.data.repo}/blob/${projectFields.branch || 'main'}/${n8nResponse.data.filePath}`;
+        additionalInfo = `\n🔗 <${githubUrl}|GitHubで確認>`;
+      } else if (n8nResponse) {
+        // n8n returned but with error or different format
+        statusText = n8nResponse.message || 'ファイルをn8nワークフローに送信しました！';
+      } else {
+        statusText = 'プロジェクトを選択しました（n8nへの送信は失敗しました）';
+      }
       
       const confirmationBlocks = [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${statusEmoji} ${statusText}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${projectFields.owner}/${projectFields.repo}\n📁 保存先: ${projectFields.path_prefix}`
+            text: `${statusEmoji} ${statusText}${additionalInfo}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${projectFields.owner}/${projectFields.repo}\n📁 保存先: ${n8nResponse?.data?.filePath || projectFields.path_prefix + fileName}`
           }
-        },
-        {
-          type: "divider"
         }
       ];
+      
+      // Add commit details if available
+      if (n8nResponse?.data?.commitMessage) {
+        confirmationBlocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `💬 コミットメッセージ: ${n8nResponse.data.commitMessage}\n🌿 ブランチ: ${projectFields.branch || 'main'}`
+          }
+        });
+      }
+      
+      confirmationBlocks.push({
+        type: "divider"
+      });
 
       // Send confirmation blocks to the channel
       await client.chat.postMessage({
