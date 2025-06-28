@@ -47,13 +47,14 @@ node api/test-airtable.js
 node api/test-slack-auth.js
 
 # View Lambda logs
-aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato
+aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region us-east-1
 
 # Update environment variables
 aws lambda update-function-configuration \
   --function-name slack-classify-bot \
   --environment "file://api/env.json" \
-  --profile k.sato
+  --profile k.sato \
+  --region us-east-1
 ```
 
 ## Development Workflow
@@ -239,13 +240,13 @@ Slack File Upload → Lambda Function → AI Summarization → Project Selection
 ### Debug Commands
 ```bash
 # Check recent logs
-aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato
+aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region us-east-1
 
 # Get function configuration
-aws lambda get-function-configuration --function-name slack-classify-bot --profile k.sato
+aws lambda get-function-configuration --function-name slack-classify-bot --profile k.sato --region us-east-1
 
 # Test invoke (with test event)
-aws lambda invoke --function-name slack-classify-bot --payload file://test-event.json response.json --profile k.sato
+aws lambda invoke --function-name slack-classify-bot --payload file://test-event.json response.json --profile k.sato --region us-east-1
 ```
 
 ## Future Enhancements (from SECURITY-ARCHITECTURE.md)
