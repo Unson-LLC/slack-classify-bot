@@ -1,0 +1,238 @@
+{
+  "name": "Airtable 連携版 Slack to GitHub",
+  "nodes": [
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "=  {\n    \"status\": \"success\",\n    \"message\": \"File successfully committed to GitHub\",\n    \"data\": {\n      \"owner\": \"{{ $('Extract Project Info').item.json.owner }}\",\n      \"repo\": \"{{ $('Extract Project Info').item.json.repo }}\",\n      \"filePath\": \"{{ $('Generate Markdown').item.json.filePath }}\",\n      \"commitUrl\": \"{{ $('Commit to GitHub').item.json.commit.html_url }}\",\n      \"commitMessage\": \"{{ $('Generate Markdown').item.json.commitMessage }}\",\n      \"commitSha\": \"{{ $('Commit to GitHub').item.json.commit.sha }}\"\n    }\n  }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        640
+      ],
+      "id": "ab3a6b69-53ee-442e-8c6d-ccc10d33f2ce",
+      "name": "Respond to Webhook2"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"status\": \"ignored\",\n  \"message\": \"File type not supported (only .txt files are processed)\",\n  \"fileType\": \"{{ $json.event && $json.event.files && $json.event.files[0] ? $json.event.files[0].filetype : 'unknown' }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        460,
+        840
+      ],
+      "id": "1dbcf4ab-09c9-4f88-90f1-584bba4c4e25",
+      "name": "Respond to Webhook3"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/slack-airtable",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1ad16512-ef24-4ae8-ac8f-0f443a73ea50",
+      "name": "Slack Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        20,
+        740
+      ],
+      "webhookId": "0226579f-4018-4519-9731-7f18a4196972"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "12345678-1234-5678-9abc-123456789abc",
+              "leftValue": "={{ $json.body && $json.body.file && $json.body.file.name && $json.body.file.name.toLowerCase().endsWith('.txt') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ba8ea615-3cdd-470d-812b-04ac33a15241",
+      "name": "Filter TXT Files",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        240,
+        740
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract data from new Lambda function format\n  const body = $input.first().json.body || {};\n  const file = body.file || {};\n  const project = body.project || {};\n\n  // Extract file and project information\n  const fileName = file.name || '';\n  const formattedName = file.formattedName || '';  \n  const fileContent = file.content || '';\n  const channel = file.channel || '';\n  const user = file.uploaded_by || '';\n  const ts = file.timestamp || '';\n\n  // Project information from Lambda\n  const projectId = project.id || '';\n  const projectName = project.name || '';\n  const owner = project.owner || 'default-owner';\n  const repo = project.repo || 'default-repo';\n  const pathPrefix = project.path_prefix || 'docs/';\n  const branch = project.branch || 'main';\n\n  return {\n    json: {\n      fileName: fileName,\n      formattedName: formattedName,  \n      fileContent: fileContent,\n      channel: channel,\n      user: user,\n      ts: ts,\n      projectId: projectId,\n      projectName: projectName,\n      owner: owner,\n      repo: repo,\n      pathPrefix: pathPrefix,\n      branch: branch\n    }\n  };"
+      },
+      "id": "8501f835-4041-4bb6-9789-0b1d86ae9607",
+      "name": "Extract Project Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate markdown content from extracted data\n  const data = $input.first().json;\n\n  // Generate markdown content\n  const now = new Date();\n  const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD\n  const timeStr = now.toTimeString().split(' ')[0]; // HH:MM:SS\n\n  const markdownContent = `# ${data.fileName}\n**Date:** ${dateStr}  \n**Time:** ${timeStr}  \n**Channel:** ${data.channel}  \n**User:** ${data.user}  \n**Project:** ${data.projectName} (${data.projectId})\n  ---\n\n  ${data.fileContent}\n\n  ---\n\n  *Generated automatically from Slack via n8n*\n  `;\n\n  // Use the AI-generated formatted filename from Lambda\n  const filePath = `${data.pathPrefix}${data.formattedName}`;\n\n  return {\n    json: {\n      owner: data.owner,\n      repo: data.repo,\n      branch: data.branch,\n      filePath: filePath,\n      markdownContent: markdownContent,\n      commitMessage: `Add meeting notes: ${data.fileName} (${dateStr})`,\n      originalEvent: {\n        channel: data.channel,\n        ts: data.ts,\n        fileName: data.fileName,\n        projectName: data.projectName\n      }\n    }\n  };"
+      },
+      "id": "22a6189d-9ae1-4f21-9172-8d1da7951cb3",
+      "name": "Generate Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "owner": {
+          "__rl": true,
+          "value": "={{ $json.owner }}",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "={{ $json.repo }}",
+          "mode": "name"
+        },
+        "filePath": "=  {{ $json.filePath }}",
+        "fileContent": "= {{ $('Generate Markdown').item.json.markdownContent }}",
+        "commitMessage": "={{ $json.commitMessage }}"
+      },
+      "id": "efc7e72b-320d-451a-8466-f3a8dffb3eae",
+      "name": "Commit to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [
+        900,
+        640
+      ],
+      "webhookId": "810798b4-0cb1-46c7-b767-609d102f8d28",
+      "credentials": {
+        "githubApi": {
+          "id": "QcYeNeWetGlCAbem",
+          "name": "GitHub account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Slack Webhook": {
+      "main": [
+        [
+          {
+            "node": "Filter TXT Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter TXT Files": {
+      "main": [
+        [
+          {
+            "node": "Extract Project Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Project Info": {
+      "main": [
+        [
+          {
+            "node": "Generate Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Markdown": {
+      "main": [
+        [
+          {
+            "node": "Commit to GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commit to GitHub": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "587e40e6-c637-4763-86c5-8f172be9e800",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "1144fdee7b82ae1a42d13a30076c2443c0d64cb36d0aaa2f8acc23646fc58b25"
+  },
+  "id": "aXSt3W8XEme4nAej",
+  "tags": [
+    {
+      "createdAt": "2025-05-23T13:39:14.181Z",
+      "updatedAt": "2025-05-23T13:39:14.181Z",
+      "id": "0CHA77RiZMrIpugj",
+      "name": "airtable-integration"
+    },
+    {
+      "createdAt": "2025-05-23T13:39:14.193Z",
+      "updatedAt": "2025-05-23T13:39:14.193Z",
+      "id": "BLf012IsKvNcoOnv",
+      "name": "slack-github"
+    },
+    {
+      "createdAt": "2025-05-25T00:22:45.783Z",
+      "updatedAt": "2025-05-25T00:22:45.783Z",
+      "id": "FJuuyJEJzCZtDuW0",
+      "name": "direct-slack-webhook"
+    }
+  ]
+}

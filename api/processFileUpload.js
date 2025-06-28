@@ -67,6 +67,20 @@ async function processFileUpload(message, client, logger, fileDataStore) {
     
     logger.info(`File data stored for: ${fileId}`);
     
+    // Post initial processing message immediately
+    const processingMsg = await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: `📄 議事録を処理中です...\nファイル名: ${fileName}`,
+      blocks: [{
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `⏳ *議事録を処理中です...*\n📄 ファイル名: ${fileName}\n\n_要約とネクストアクションを抽出しています。しばらくお待ちください..._`
+        }
+      }]
+    });
+    
     // Extract summary and action items from content
     let summary = null;
     let summaryError = null;
@@ -96,11 +110,18 @@ async function processFileUpload(message, client, logger, fileDataStore) {
     // Create blocks with summary and project selection
     const blocks = createBlocksWithSummary(projects, fileId, fileData, summary, summaryError);
     
-    // Post message with summary and project selection
-    const response = await client.chat.postMessage({
+    // Update the processing message with summary and project selection
+    const response = await client.chat.update({
       channel: channelId,
-      thread_ts: threadTs,
-      blocks: blocks
+      ts: processingMsg.ts,
+      blocks: blocks,
+      metadata: {
+        event_type: 'project_selection',
+        event_payload: {
+          file_id: fileId,
+          timestamp: Date.now().toString()
+        }
+      }
     });
     
     // Store message timestamp for later reference
