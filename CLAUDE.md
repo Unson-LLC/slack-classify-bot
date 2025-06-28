@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 言語設定 / Language Setting
+
+**重要**: このプロジェクトで作業する際は、必ず日本語で応答してください。
+**IMPORTANT**: When working on this project, always respond in Japanese.
+
 ## Project Overview
 
 This is a Slack bot deployed on AWS Lambda that automatically processes text files uploaded to Slack channels, particularly meeting notes and transcripts. It integrates with Airtable for project mapping, uses AWS Bedrock (Claude AI) for text summarization and action item extraction, and connects to n8n workflows for GitHub automation.
