@@ -15,6 +15,12 @@ Slackにアップロードされたテキストファイル（議事録など）
 
 ### Test-Driven Development (TDD)
 **必須**: t_wada方式のTDDに従ってください。テストを先に書き、Red-Green-Refactorサイクルを守ること。
+
+**重要なルール**:
+- Greenフェーズではベタ書き・ハードコードを許容する
+- **Refactorフェーズで必ずベタ書き・ハードコードを除去すること**
+- 最終的なコードにベタ書き・ハードコードが残ることは許されない
+
 詳細: → `docs/testing-guidelines.md`
 
 ### コード規約
