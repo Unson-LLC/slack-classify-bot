@@ -9,22 +9,37 @@
  * - processFileUpload.js: ファイルアップロード処理
  */
 
-const axios = require('axios');
-jest.mock('axios');
+// モックを最初に設定
+jest.mock('axios', () => ({
+  get: jest.fn(),
+  post: jest.fn()
+}));
 jest.mock('airtable');
 jest.mock('../llm-integration', () => ({
   generateFilename: jest.fn().mockResolvedValue('test-content-meeting')
 }));
+
+const axios = require('axios');
 
 describe('GitHub Commit Completion Message Thread Posting', () => {
   let mockClient;
   let mockLogger;
   let AirtableIntegration;
   let airtableIntegration;
+  let consoleLogSpy;
+  let consoleErrorSpy;
   
   beforeEach(() => {
     jest.clearAllMocks();
     jest.resetModules();
+    
+    // axiosモックをリセット
+    axios.get.mockReset();
+    axios.post.mockReset();
+    
+    // Spy on console - コメントアウトしてデバッグ出力を有効にする
+    // consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
+    // consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
     
     // Mock Slack client
     mockClient = {
@@ -85,6 +100,13 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
     process.env.AIRTABLE_TOKEN = 'test-token';
     process.env.AIRTABLE_BASE = 'test-base';
     process.env.N8N_ENDPOINT = 'http://test-n8n.com/webhook';
+    process.env.N8N_AIRTABLE_ENDPOINT = 'http://test-n8n.com/webhook';
+    
+    // jest.resetModules()の後、axiosモックを再設定
+    jest.doMock('axios', () => ({
+      get: axios.get,
+      post: axios.post
+    }));
     
     // Require after environment setup
     AirtableIntegration = require('../airtable-integration');
@@ -95,6 +117,9 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
     delete process.env.AIRTABLE_TOKEN;
     delete process.env.AIRTABLE_BASE;
     delete process.env.N8N_ENDPOINT;
+    delete process.env.N8N_AIRTABLE_ENDPOINT;
+    // consoleLogSpy.mockRestore();
+    // consoleErrorSpy.mockRestore();
   });
   
   describe('processFileWithProject メソッドのスレッド投稿', () => {
@@ -125,32 +150,43 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
       mockFileDataStore.set('F123456_C123456', {
         fileId: 'F123456',
         fileName: 'test.txt',
-        content: 'Test content',
+        content: 'Test file content for meeting',  // 追加: コンテンツが必要
+        summary: '会議の概要: テスト会議の内容です',  // 追加: サマリーも必要
         channelId: 'C123456',
         userId: 'U123456',
         threadTs: '1234567890.100' // 元のスレッドTS
+      });
+      // fileIdだけでも取得できるように
+      mockFileDataStore.set('F123456', {
+        fileId: 'F123456',
+        fileName: 'test.txt',
+        content: 'Test file content for meeting',
+        summary: '会議の概要: テスト会議の内容です',
+        channelId: 'C123456',
+        userId: 'U123456',
+        threadTs: '1234567890.100'
       });
     });
     
     test('GitHubコミット成功時にスレッド内に完了メッセージを投稿する', async () => {
       // Arrange
-      axios.post.mockImplementation((url) => {
-        if (url.endsWith('/slack-airtable')) {
-          return Promise.resolve({
+      // axios.postのモック設定
+      axios.post.mockImplementation(() => {
+        // 成功レスポンスを返す
+        const response = {
+          data: {
+            status: 'success',
             data: {
-              status: 'success',
-              data: {
-                owner: 'test-owner',
-                repo: 'test-repo',
-                commitUrl: 'https://github.com/test-owner/test-repo/commit/abc123',
-                filePath: 'meetings/2025-06-28_test-content-meeting.md',
-                commitMessage: 'Add meeting notes',
-                commitSha: 'abc123'
-              }
+              owner: 'test-owner',
+              repo: 'test-repo',
+              commitUrl: 'https://github.com/test-owner/test-repo/commit/abc123',
+              filePath: 'meetings/2025-06-28_test-content-meeting.md',
+              commitMessage: 'Add meeting notes',
+              commitSha: 'abc123'
             }
-          });
-        }
-        return Promise.reject(new Error('Unexpected URL'));
+          }
+        };
+        return Promise.resolve(response);
       });
       
       // Act
@@ -168,9 +204,14 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
           channel: 'C123456',
           thread_ts: '1234567890.100', // 元のスレッドTSが使用されている
           blocks: expect.any(Array),
-          text: expect.stringContaining('GitHubにコミットしました')
+          text: 'ファイルをn8nワークフローに送信しました: test.txt → Test Project'
         })
       );
+      
+      // ブロックの内容も確認
+      const messageCall = mockClient.chat.postMessage.mock.calls[0][0];
+      expect(messageCall.blocks[0].text.text).toContain('ファイルをGitHubにコミットしました！');
+      expect(messageCall.blocks[0].text.text).toContain('GitHubに保存されました');
     });
     
     test('thread_tsがない場合はmessage.tsをthread_tsとして使用する', async () => {
@@ -194,14 +235,23 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
         }]
       ]);
       
-      axios.post.mockResolvedValue({
-        data: {
-          status: 'success',
-          data: {
-            owner: 'test-owner',
-            repo: 'test-repo'
-          }
+      axios.post.mockImplementation((url) => {
+        if (url === 'https://test.n8n.io/webhook/airtable/slack-airtable' || 
+            url === 'https://test.n8n.io/webhook/test/slack-airtable' ||
+            url === 'http://test-n8n.com/webhook/slack-airtable') {
+          return Promise.resolve({
+            data: {
+              status: 'success',
+              data: {
+                owner: 'test-owner',
+                repo: 'test-repo',
+                commitUrl: 'https://github.com/test-owner/test-repo/commit/abc123',
+                filePath: 'meetings/2025-06-28_test-content-meeting.md'
+              }
+            }
+          });
         }
+        return Promise.reject(new Error('Unexpected URL'));
       });
       
       // Act
@@ -225,8 +275,23 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
     
     test('fileDataStoreからthreadTsを正しく取得する', async () => {
       // Arrange
-      axios.post.mockResolvedValue({
-        data: { status: 'success' }
+      axios.post.mockImplementation((url) => {
+        if (url === 'https://test.n8n.io/webhook/airtable/slack-airtable' || 
+            url === 'https://test.n8n.io/webhook/test/slack-airtable' ||
+            url === 'http://test-n8n.com/webhook/slack-airtable') {
+          return Promise.resolve({
+            data: {
+              status: 'success',
+              data: {
+                owner: 'test-owner',
+                repo: 'test-repo',
+                commitUrl: 'https://github.com/test-owner/test-repo/commit/abc123',
+                filePath: 'meetings/2025-06-28_test-content-meeting.md'
+              }
+            }
+          });
+        }
+        return Promise.reject(new Error('Unexpected URL'));
       });
       
       // Act
@@ -256,6 +321,7 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
         projectId: 'proj123',
         projectName: 'Test Project',
         fileId: 'F123456',
+        fileName: 'test.txt',  // fileNameを追加
         channelId: 'C123456'
       })
     };
@@ -294,9 +360,14 @@ describe('GitHub Commit Completion Message Thread Posting', () => {
         expect.objectContaining({
           channel: 'C123456',
           thread_ts: '1234567890.100', // エラー時もスレッドに投稿
-          text: expect.stringContaining('n8nへの送信は失敗しました')
+          blocks: expect.any(Array),
+          text: 'ファイルをn8nワークフローに送信しました: test.txt → Test Project'
         })
       );
+      
+      // エラー時のメッセージ内容を確認
+      const messageCall = mockClient.chat.postMessage.mock.calls[0][0];
+      expect(messageCall.blocks[0].text.text).toContain('プロジェクトを選択しました（n8nへの送信は失敗しました）');
     });
   });
 });
