@@ -178,8 +178,13 @@ class AirtableIntegration {
       console.log('Sending payload to n8n:', JSON.stringify(payload, null, 2));
 
       // Send to n8n workflow
+      const n8nEndpoint = process.env.N8N_AIRTABLE_ENDPOINT || process.env.N8N_ENDPOINT;
+      if (!n8nEndpoint) {
+        throw new Error('N8N_AIRTABLE_ENDPOINT or N8N_ENDPOINT environment variable is not set');
+      }
+      
       const response = await axios.post(
-        this.n8nEndpoint,
+        n8nEndpoint,
         payload,
         {
           headers: {
@@ -220,8 +225,13 @@ class AirtableIntegration {
         timestamp: new Date().toISOString()
       };
 
+      const n8nEndpoint = process.env.N8N_ENDPOINT;
+      if (!n8nEndpoint) {
+        throw new Error('N8N_ENDPOINT environment variable is not set');
+      }
+      
       const response = await axios.post(
-        `${this.n8nEndpoint}`,
+        n8nEndpoint,
         payload,
         {
           headers: {
@@ -286,8 +296,13 @@ class AirtableIntegration {
         timestamp: new Date().toISOString()
       };
 
+      const n8nEndpoint = process.env.N8N_ENDPOINT;
+      if (!n8nEndpoint) {
+        throw new Error('N8N_ENDPOINT environment variable is not set');
+      }
+      
       const response = await axios.post(
-        `${this.n8nEndpoint}/webhook/slack-analytics`,
+        `${n8nEndpoint}/webhook/slack-analytics`,
         payload,
         {
           headers: {

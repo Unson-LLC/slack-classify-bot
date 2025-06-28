@@ -1,7 +1,9 @@
 const Airtable = require('airtable');
+const axios = require('axios');
 
-// Mock Airtable
+// Mock Airtable and axios
 jest.mock('airtable');
+jest.mock('axios');
 
 describe('AirtableIntegration', () => {
   let AirtableIntegration;
@@ -30,6 +32,8 @@ describe('AirtableIntegration', () => {
     process.env.AIRTABLE_TOKEN = mockAirtableApiKey;
     process.env.AIRTABLE_BASE = mockAirtableBaseId;
     process.env.AIRTABLE_TABLE_NAME = mockTableName;
+    process.env.N8N_ENDPOINT = 'http://test-n8n.com/webhook';
+    process.env.N8N_AIRTABLE_ENDPOINT = 'http://test-n8n.com/webhook/airtable';
     
     // Setup mock instances
     mockTableInstance = {
@@ -231,6 +235,16 @@ describe('AirtableIntegration', () => {
     });
     
     it('should process file with selected project successfully', async () => {
+      // Mock axios for API calls
+      axios.get = jest.fn().mockResolvedValue({
+        data: {
+          records: [
+            { id: 'alpha-123', fields: { Name: 'Alpha Project', owner: 'test', repo: 'test-repo' } }
+          ]
+        }
+      });
+      axios.post = jest.fn().mockResolvedValue({ data: { success: true } });
+      
       await airtableIntegration.processFileWithProject(
         mockAction,
         mockBody,
