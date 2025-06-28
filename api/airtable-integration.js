@@ -623,12 +623,22 @@ class AirtableIntegration {
         type: "divider"
       });
 
-      // Get thread timestamp from file data store
+      // Get thread timestamp from file data store or body
       let threadTs = null;
-      const fileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${channelId}`);
-      if (fileData && fileData.threadTs) {
-        threadTs = fileData.threadTs;
-        logger.info(`Using thread timestamp: ${threadTs}`);
+      const storedFileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${channelId}`);
+      if (storedFileData && storedFileData.threadTs) {
+        threadTs = storedFileData.threadTs;
+        logger.info(`Using thread timestamp from fileDataStore: ${threadTs}`);
+      } else if (body.message && body.message.thread_ts) {
+        threadTs = body.message.thread_ts;
+        logger.info(`Using thread timestamp from body.message: ${threadTs}`);
+      } else if (body.message && body.message.ts) {
+        threadTs = body.message.ts;
+        logger.info(`Using message timestamp as thread: ${threadTs}`);
+      }
+      
+      if (!threadTs) {
+        logger.warn('No thread timestamp found, message will be posted to channel');
       }
       
       // Send confirmation blocks to the thread
