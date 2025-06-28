@@ -5,11 +5,16 @@ const path = require('path');
 // Local dependencies
 const { processFileUpload } = require('./processFileUpload');
 const AirtableIntegration = require('./airtable-integration');
+const { HybridDeduplicationService } = require('./dynamodb-deduplication');
 
 // In-memory store for file data
 const fileDataStore = new Map();
 
-// Event deduplication store
+// Initialize deduplication service
+const deduplicationService = new HybridDeduplicationService(console);
+console.log('DynamoDB deduplication enabled');
+
+// Legacy in-memory deduplication (kept for backward compatibility)
 const processedEvents = new Map();
 const EVENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
 
@@ -101,22 +106,44 @@ app.message(async ({ message, client, logger, event }) => {
     
     logger.info(`Event details - Event ID: ${eventId || 'not available'}, File ID: ${fileId}, TS: ${message.ts}`);
     
-    // Check if we've already processed this event
-    if (processedEvents.has(eventKey)) {
-      logger.info(`Duplicate event detected (key: ${eventKey}), skipping processing.`);
-      return;
-    }
-    
-    // Mark this event as processed
-    processedEvents.set(eventKey, Date.now());
-    logger.info(`Processing new file upload event (key: ${eventKey})`);
+    // Build metadata for deduplication
+    const metadata = {
+      file_id: fileId,
+      channel_id: message.channel,
+      user_id: message.user,
+      lambda_instance_id: global.context?.awsRequestId || 'unknown'
+    };
     
     try {
+      // Check with DynamoDB deduplication service
+      const { isNew, reason } = await deduplicationService.checkAndMarkProcessed(eventKey, metadata);
+      
+      if (!isNew) {
+        logger.info(`Duplicate event detected (key: ${eventKey}), reason: ${reason}`);
+        return;
+      }
+      
+      logger.info(`Processing new file upload event (key: ${eventKey})`);
       await processFileUpload(message, client, logger, fileDataStore);
     } catch (error) {
-      logger.error('Error in processFileUpload async call:', error);
-      // Remove from processed events on error to allow retry
-      processedEvents.delete(eventKey);
+      logger.error('Error in file upload processing:', error);
+      
+      // If it's a deduplication error, fall back to legacy in-memory check
+      if (error.message && error.message.includes('deduplication')) {
+        logger.info('Falling back to in-memory deduplication');
+        if (processedEvents.has(eventKey)) {
+          logger.info(`Duplicate event detected via fallback (key: ${eventKey})`);
+          return;
+        }
+        processedEvents.set(eventKey, Date.now());
+        logger.info(`Processing new file upload event via fallback (key: ${eventKey})`);
+        
+        try {
+          await processFileUpload(message, client, logger, fileDataStore);
+        } catch (processError) {
+          logger.error('Error in processFileUpload:', processError);
+        }
+      }
     }
   }
 });

@@ -66,13 +66,27 @@ echo "      - Done."
 
 # --- Environment Variables ---
 echo "[5/6] Updating environment variables..."
-aws lambda update-function-configuration \
-  --function-name "$FUNCTION_NAME" \
-  --region "$REGION" \
-  --environment "file://$API_DIR/env.json" \
-  --profile k.sato \
-  --no-cli-pager
-echo "      - Done."
+# Check if env.json exists
+if [ ! -f "$API_DIR/env.json" ]; then
+  echo "      ⚠️  Warning: env.json not found. Skipping environment variable update."
+  echo "      To update environment variables, create $API_DIR/env.json from env.json.template"
+else
+  # Check if env.json contains template values
+  if grep -q "YOUR-SLACK-BOT-TOKEN\|YOUR-SLACK-SIGNING-SECRET\|YOUR-BOT-ID" "$API_DIR/env.json"; then
+    echo "      ⚠️  ERROR: env.json contains template values!"
+    echo "      Please update env.json with actual values before deploying."
+    exit 1
+  fi
+  
+  echo "      - Updating environment variables from env.json..."
+  aws lambda update-function-configuration \
+    --function-name "$FUNCTION_NAME" \
+    --region "$REGION" \
+    --environment "file://$API_DIR/env.json" \
+    --profile k.sato \
+    --no-cli-pager
+  echo "      - Done."
+fi
 
 # --- Finalization ---
 FUNCTION_URL=$(aws lambda get-function-url-config --function-name "$FUNCTION_NAME" --region "$REGION" --profile k.sato --query "FunctionUrl" --output text)

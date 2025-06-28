@@ -38,6 +38,8 @@ terraform/*.tfplan
 
 # Environment configuration files
 env-*.json
+api/env.json
+!api/env.json.template
 
 # Temporary test files
 test-*.json
