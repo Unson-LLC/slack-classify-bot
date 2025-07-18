@@ -171,4 +171,96 @@ ${truncatedText}
   }
 }
 
-module.exports = { summarizeText, generateFilename }; 
+/**
+ * 文字起こしデータから詳細な議事録を生成します。
+ * @param {string} text - 文字起こしデータ
+ * @returns {Promise<string|null>} - 議事録、またはエラー時にnull
+ */
+async function generateMeetingMinutes(text) {
+  if (!text || text.trim() === "") {
+    return null;
+  }
+
+  // モデルの最大トークン数を超えないようにテキストを切り詰める（安全策）
+  const maxChars = 180000;
+  const truncatedText = text.length > maxChars ? text.substring(0, maxChars) : text;
+
+  const modelId = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+  
+  const prompt = `以下の文字起こしデータから、Slack投稿用の質の高い議事録を作成してください。
+
+# 出力形式（Slack mrkdwn記法を使用）
+*📅 会議情報*
+• 日時: [推定される日時]
+• 参加者: [推定される参加者]
+
+*📋 議題・内容*
+[主要な議題と内容を整理。重要な部分は*太字*で強調]
+
+*✅ 決定事項*
+[会議で決定されたことを箇条書き。重要な決定は*太字*で強調]
+
+*📝 課題・懸念事項*
+[議論された課題や懸念事項。緊急度の高いものは*太字*で強調]
+
+*🎯 次回までのアクション*
+[担当者と期限を含む具体的なアクション。担当者は*太字*で強調]
+
+# 制約
+- Slack mrkdwn記法を使用: *太字*、_斜体_、~取り消し線~、\`コード\`
+- 項目は「•」(bulletpoint)を使用
+- 読みやすく構造化された議事録を作成
+- 重要な決定事項や課題を漏らさない
+- 担当者や期限が明確な場合は必ず記載し、担当者名は*太字*にする
+- 不明な情報は「不明」や「要確認」と記載
+- コードや技術用語は\`バッククォート\`で囲む
+- セクションヘッダーは*太字*で強調
+
+# 文字起こしデータ
+${truncatedText}
+`;
+
+  const payload = {
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: 4096,
+    messages: [{
+      role: "user",
+      content: [{
+        type: "text",
+        text: prompt
+      }]
+    }]
+  };
+
+  // Create bedrock client with COMPLETE configuration override
+  const requestClient = new BedrockRuntimeClient({
+    region: BEDROCK_REGION,
+    endpoint: `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com`,
+    credentials: undefined
+  });
+
+  const command = new InvokeModelCommand({
+    contentType: "application/json",
+    body: JSON.stringify(payload),
+    modelId,
+  });
+
+  try {
+    console.log('Generating meeting minutes with Bedrock...');
+    const apiResponse = await requestClient.send(command);
+    const decoded = new TextDecoder().decode(apiResponse.body);
+    const responseBody = JSON.parse(decoded);
+    
+    if (responseBody.content && responseBody.content.length > 0) {
+      return responseBody.content[0].text;
+    } else {
+      throw new Error("Bedrockからのレスポンス形式が不正です。");
+    }
+  } catch (error) {
+    console.error("Bedrockでの議事録生成中にエラーが発生しました:", error);
+    // エラーが発生した場合はnullを返すことで、メインの処理フローを止めない
+    return null;
+  }
+}
+
+module.exports = { summarizeText, generateFilename, generateMeetingMinutes }; 

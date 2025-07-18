@@ -48,6 +48,286 @@ class AirtableIntegration {
   }
 
   /**
+   * Get Slack channels for a project
+   * @param {string} projectId - Project ID
+   * @returns {Promise<Array>} - Array of channel IDs
+   */
+  async getSlackChannelsForProject(projectId) {
+    try {
+      const record = await this.airtable(this.tableName).find(projectId);
+      if (!record) {
+        return [];
+      }
+      
+      const channelRecordIds = record.fields.slack_channels || [];
+      if (!Array.isArray(channelRecordIds) || channelRecordIds.length === 0) {
+        return [];
+      }
+      
+      // Get the actual channel IDs from linked records
+      const channelIds = [];
+      for (const channelRecordId of channelRecordIds) {
+        try {
+          const channelRecord = await this.airtable('slack_channels').find(channelRecordId);
+          if (channelRecord && channelRecord.fields.channel_id) {
+            channelIds.push(channelRecord.fields.channel_id);
+          }
+        } catch (channelError) {
+          console.error(`Error getting channel record ${channelRecordId}:`, channelError.message);
+        }
+      }
+      
+      return channelIds;
+    } catch (error) {
+      console.error('Error getting Slack channels for project:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Create interactive buttons for channel selection
+   * @param {Array} channels - List of channels
+   * @param {string} projectId - Project ID
+   * @param {string} fileId - Slack file ID
+   * @param {Object} fileData - File data
+   * @returns {Object} - Slack blocks for interactive message
+   */
+  createChannelSelectionBlocks(channels, projectId, fileId, fileData, projectName = null) {
+    const blocks = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `📝 *アップロードされたファイル*\n📄 ファイル名: \`${fileData.fileName}\`\n📅 処理日時: ${new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}`
+        }
+      },
+      {
+        type: "divider"
+      }
+    ];
+
+    // 要約がある場合は表示
+    if (fileData.summary) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `📋 *要約*\n${fileData.summary}`
+        }
+      });
+      blocks.push({
+        type: "divider"
+      });
+    }
+
+    blocks.push(
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `✅ *選択されたプロジェクト*\n📂 プロジェクト: *${projectName || projectId}*`
+        },
+        accessory: {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "変更",
+            emoji: true
+          },
+          value: JSON.stringify({
+            fileId: fileId,
+            fileName: fileData.fileName,
+            channelId: fileData.channelId,
+            classificationResult: fileData.classificationResult,
+            summary: fileData.summary
+          }),
+          action_id: "change_project_selection"
+        }
+      },
+      {
+        type: "divider"
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: (channels.length > 0 ? 
+            "📢 *チャネルを選択してください* 📢\n\n🎯 議事録を投稿するチャネルを選んでください:" :
+            "⚠️ *利用可能なチャネルがありません* ⚠️\n\nこのプロジェクトにはSlackチャネルが設定されていません。")
+        }
+      },
+      {
+        type: "divider"
+      }
+    );
+
+    if (channels.length > 0) {
+      // Add channel buttons with max 5 per row
+      const channelChunks = this.chunkArray(channels, 5);
+      
+      channelChunks.forEach(chunk => {
+        const actionBlock = {
+          type: "actions",
+          elements: chunk.map(channel => ({
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: `#${channel.name}`,
+              emoji: true
+            },
+            value: JSON.stringify({
+              projectId: projectId,
+              channelId: channel.id,
+              fileId: fileId,
+              fileName: fileData.fileName,
+              classificationResult: fileData.classificationResult,
+              summary: fileData.summary
+            }),
+            action_id: `select_channel_${channel.id}`,
+            style: "primary"
+          }))
+        };
+        blocks.push(actionBlock);
+      });
+    }
+
+    // Add cancel button
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "閉じる",
+            emoji: true
+          },
+          value: JSON.stringify({ fileId: fileId }),
+          action_id: "cancel_channel_selection"
+        }
+      ]
+    });
+
+    return blocks;
+  }
+
+  /**
+   * Post meeting minutes to selected Slack channel (summary first, then detailed minutes in thread)
+   * @param {Object} client - Slack client
+   * @param {string} channelId - Channel ID
+   * @param {string} minutes - Meeting minutes content
+   * @param {string} fileName - Original file name
+   * @param {string} summary - Meeting summary (optional)
+   * @returns {Promise<Object>} - Result object
+   */
+  async postMinutesToChannel(client, channelId, minutes, fileName, summary = null) {
+    try {
+      // First, post the summary as the main message
+      const summaryBlocks = [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `📝 *会議要約: ${fileName}*\n\n_AI生成による要約です_`
+          }
+        },
+        {
+          type: "divider"
+        }
+      ];
+
+      if (summary) {
+        summaryBlocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: summary
+          }
+        });
+      } else {
+        summaryBlocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "📋 要約データが利用できません。詳細な議事録は下記のスレッドをご確認ください。"
+          }
+        });
+      }
+
+      summaryBlocks.push(
+        {
+          type: "divider"
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `💬 _詳細な議事録はこの投稿のスレッドに投稿されます_`
+            }
+          ]
+        }
+      );
+
+      // Post the summary first
+      const summaryResponse = await client.chat.postMessage({
+        channel: channelId,
+        text: `📝 会議要約: ${fileName}`,
+        blocks: summaryBlocks
+      });
+
+      // Then post the detailed minutes as a thread reply
+      const detailBlocks = [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `📄 *詳細議事録: ${fileName}*\n\n_AI生成による詳細な議事録です_`
+          }
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: minutes
+          }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `🤖 _この議事録はAIにより自動生成されました。必要に応じて内容をご確認ください。_`
+            }
+          ]
+        }
+      ];
+
+      const detailResponse = await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: summaryResponse.ts, // Post as thread reply
+        text: `📄 詳細議事録: ${fileName}`,
+        blocks: detailBlocks
+      });
+
+      return {
+        success: true,
+        summaryMessageTs: summaryResponse.ts,
+        detailMessageTs: detailResponse.ts
+      };
+    } catch (error) {
+      console.error('Error posting minutes to channel:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
    * Create interactive buttons for project selection
    * @param {Array} projects - List of projects
    * @param {string} fileId - Slack file ID
@@ -86,7 +366,8 @@ class AirtableIntegration {
             fileId: fileId,
             fileName: fileData.fileName,
             channelId: fileData.channelId,
-            classificationResult: fileData.classificationResult
+            classificationResult: fileData.classificationResult,
+            summary: fileData.summary // Include summary in button value
           }),
           action_id: `select_project_${project.id}`,
           style: "primary"

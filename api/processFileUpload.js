@@ -58,7 +58,8 @@ async function processFileUpload(message, client, logger, fileDataStore) {
       channelId,
       userId,
       threadTs,
-      uploadedAt: new Date().toISOString()
+      uploadedAt: new Date().toISOString(),
+      classificationResult: {}
     };
     
     // Store with multiple keys for better retrieval
@@ -89,10 +90,20 @@ async function processFileUpload(message, client, logger, fileDataStore) {
       logger.info('Extracting summary and action items...');
       summary = await summarizeText(content);
       fileData.summary = summary;
-      logger.info('Summary extraction completed');
+      
+      // Update fileDataStore with summary
+      fileDataStore.set(fileId, fileData);
+      fileDataStore.set(`${fileId}_${channelId}`, fileData);
+      
+      logger.info('Summary extraction completed and stored');
     } catch (error) {
       logger.error('Failed to extract summary:', error);
       summaryError = error.message;
+      fileData.summaryError = summaryError;
+      
+      // Update fileDataStore even with error
+      fileDataStore.set(fileId, fileData);
+      fileDataStore.set(`${fileId}_${channelId}`, fileData);
     }
     
     // Get project list from Airtable
@@ -106,6 +117,10 @@ async function processFileUpload(message, client, logger, fileDataStore) {
       });
       return;
     }
+    
+    // Make sure fileData includes summary before creating blocks
+    fileData.summary = summary;
+    fileData.classificationResult = fileData.classificationResult || {};
     
     // Create blocks with summary and project selection
     const blocks = createBlocksWithSummary(projects, fileId, fileData, summary, summaryError);
@@ -240,6 +255,11 @@ function createBlocksWithSummary(projects, fileId, fileData, summary, summaryErr
   
   // Add project buttons using airtable integration method
   const airtableIntegration = new AirtableIntegration();
+  
+  // Make sure fileData includes summary before creating project blocks
+  fileData.summary = summary;
+  fileData.classificationResult = fileData.classificationResult || {};
+  
   const projectBlocks = airtableIntegration.createProjectSelectionBlocks(projects, fileId, fileData);
   
   // Extract only the action blocks from the project blocks (skip header and divider)
