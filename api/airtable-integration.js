@@ -851,10 +851,29 @@ class AirtableIntegration {
             timeout: 30000
           }
         );
+
+        // Log the full response for debugging
+        logger.info('n8n HTTP response status:', response.status);
+        logger.info('n8n HTTP response headers:', response.headers);
+        logger.info('n8n response.data type:', typeof response.data);
+        logger.info('n8n response.data:', response.data);
+
         n8nResponse = response.data;
-        logger.info('n8n workflow response:', n8nResponse);
+
+        if (!n8nResponse) {
+          logger.warn('n8n returned empty response.data');
+        }
       } catch (n8nError) {
         logger.error('Failed to send to n8n workflow:', n8nError.message);
+        logger.error('n8n error details:', {
+          message: n8nError.message,
+          code: n8nError.code,
+          response: n8nError.response ? {
+            status: n8nError.response.status,
+            statusText: n8nError.response.statusText,
+            data: n8nError.response.data
+          } : 'No response'
+        });
         logger.info('n8n endpoint attempted:', `${n8nEndpoint}/slack-airtable`);
         // Continue execution even if n8n fails
       }
