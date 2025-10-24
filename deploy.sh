@@ -36,14 +36,25 @@ rm -f "$API_DIR/$ZIP_FILE"
 echo "      - Done."
 
 # 2. Install Dependencies
-echo "[2/6] Installing dependencies..."
-(cd "$API_DIR" && npm install)
+echo "[2/6] Installing production dependencies..."
+(cd "$API_DIR" && npm install --omit=dev)
 echo "      - Done."
 
 # 3. Create Zip Package
 echo "[3/6] Creating deployment package..."
 # Create the zip file in a subshell.
-(cd "$API_DIR" && zip -r "../function.zip" . -x "package.json" -x "package-lock.json" -x "jest.config.js" -x "jest.setup.js" -x "__tests__/*" -x ".*" -x "__MACOSX")
+(cd "$API_DIR" && zip -r "../function.zip" . \
+  -x "./package.json" \
+  -x "./package-lock.json" \
+  -x "./jest.config.js" \
+  -x "./jest.setup.js" \
+  -x "./__tests__/*" \
+  -x "./.git/*" \
+  -x "./.gitignore" \
+  -x "./.env" \
+  -x "./.DS_Store" \
+  -x "./coverage/*" \
+  -x "./__MACOSX/*")
 echo "      - Done."
 
 # 4. Update Function Code

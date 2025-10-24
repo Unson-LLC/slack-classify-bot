@@ -106,9 +106,25 @@ async function processFileUpload(message, client, logger, fileDataStore) {
       fileDataStore.set(`${fileId}_${channelId}`, fileData);
     }
     
-    // Get project list from Airtable
-    const projects = await airtableIntegration.getProjects();
-    
+    // Get project list from Airtable with error handling
+    let projects;
+    try {
+      projects = await airtableIntegration.getProjects();
+    } catch (error) {
+      logger.error('Failed to fetch projects:', error);
+
+      const errorMessage = error.message.includes('429')
+        ? '⚠️ Airtable APIのレート制限に達しました。少し時間を置いてから再度お試しください。'
+        : `⚠️ プロジェクト一覧の取得に失敗しました: ${error.message}`;
+
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: errorMessage
+      });
+      return;
+    }
+
     if (!projects || projects.length === 0) {
       await client.chat.postMessage({
         channel: channelId,
@@ -148,11 +164,45 @@ async function processFileUpload(message, client, logger, fileDataStore) {
     
   } catch (error) {
     logger.error('Error processing file upload:', error);
-    
-    await client.chat.postEphemeral({
+
+    // Post error message with retry button
+    await client.chat.postMessage({
       channel: channelId,
-      user: userId,
-      text: `ファイルの処理中にエラーが発生しました: ${error.message}`
+      thread_ts: threadTs,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `⚠️ *ファイル処理中にエラーが発生しました*\n\`\`\`${error.message}\`\`\``
+          }
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "🔄 再試行",
+                emoji: true
+              },
+              value: JSON.stringify({
+                fileId: fileId,
+                fileName: fileName,
+                channelId: channelId,
+                userId: userId,
+                threadTs: threadTs
+              }),
+              action_id: "retry_file_processing",
+              style: "primary"
+            }
+          ]
+        }
+      ]
     });
   }
 }
