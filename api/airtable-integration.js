@@ -1,83 +1,99 @@
 const axios = require('axios');
 const Airtable = require('airtable');
+const ProjectRepository = require('./project-repository');
 
 class AirtableIntegration {
   constructor() {
-    if (!process.env.AIRTABLE_TOKEN || !process.env.AIRTABLE_BASE) {
-      throw new Error("Airtable API Key or Base ID is not configured in environment variables.");
+    // Legacy Airtable support (optional, for migration period)
+    if (process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE) {
+      this.airtable = new Airtable({ apiKey: process.env.AIRTABLE_TOKEN }).base(
+        process.env.AIRTABLE_BASE
+      );
+      this.tableName = process.env.AIRTABLE_TABLE_NAME || 'Projects';
     }
-    this.airtable = new Airtable({ apiKey: process.env.AIRTABLE_TOKEN }).base(
-      process.env.AIRTABLE_BASE
-    );
-    this.tableName = process.env.AIRTABLE_TABLE_NAME || 'Projects';
+
+    // New DynamoDB-based project repository
+    this.projectRepository = new ProjectRepository();
+    this.timeout = 10000; // 10秒のタイムアウト
+
+    // Legacy cache (no longer used, kept for compatibility)
+    this.projectsCache = null;
+    this.projectsCacheTime = null;
+    this.projectsCacheTTL = 300000; // 5分間キャッシュ
   }
 
   /**
-   * Get all projects from Airtable
+   * Airtable呼び出しにタイムアウトを適用するヘルパー
+   * @param {Promise} promise - 実行するPromise
+   * @param {number} timeoutMs - タイムアウト時間（ミリ秒）
+   * @returns {Promise} - タイムアウト付きのPromise
+   */
+  async withTimeout(promise, timeoutMs = this.timeout) {
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Airtable API call timed out')), timeoutMs);
+    });
+    return Promise.race([promise, timeoutPromise]);
+  }
+
+  /**
+   * Get all projects (now from DynamoDB via ProjectRepository)
    * @returns {Promise<Array>} - List of projects
    */
   async getProjects() {
     try {
-      const response = await axios.get(
-        `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE}/project_id`,
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.AIRTABLE_TOKEN}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 10000
-        }
-      );
+      const projects = await this.projectRepository.getAllProjects();
 
-      const projects = response.data.records.map(record => ({
-        id: record.id,
-        name: record.fields.Name,
-        owner: record.fields.owner,
-        repo: record.fields.repo,
-        path_prefix: record.fields.path_prefix,
-        description: record.fields.description || '',
-        emoji: record.fields.emoji || '📁' // デフォルト絵文字
+      // Transform to match legacy format (id -> project_id compatibility)
+      return projects.map(project => ({
+        id: project.project_id,           // Legacy compatibility
+        project_id: project.project_id,   // New format
+        name: project.name,
+        owner: project.owner,
+        repo: project.repo,
+        path_prefix: project.path_prefix,
+        description: project.description || '',
+        emoji: project.emoji || '📁',
+        branch: project.branch || 'main'
       }));
 
-      console.log(`Found ${projects.length} projects in Airtable`);
-      return projects;
     } catch (error) {
-      console.error('Error fetching projects from Airtable:', error.message);
+      console.error('Error fetching projects:', error.message);
       throw new Error(`Failed to fetch projects: ${error.message}`);
     }
   }
 
   /**
-   * Get Slack channels for a project
+   * Get Slack channels for a project (now from DynamoDB)
    * @param {string} projectId - Project ID
-   * @returns {Promise<Array>} - Array of channel IDs
+   * @param {string} projectName - Project name (optional, for fallback with old Airtable IDs)
+   * @returns {Promise<Array>} - Array of channel IDs (for backward compatibility)
    */
-  async getSlackChannelsForProject(projectId) {
+  async getSlackChannelsForProject(projectId, projectName = null) {
     try {
-      const record = await this.airtable(this.tableName).find(projectId);
-      if (!record) {
+      // Try to get project by ID first
+      let project = await this.projectRepository.getProjectById(projectId);
+
+      // Fallback: try to find by name (for old Airtable IDs)
+      if (!project && projectName) {
+        console.log(`Project not found by ID ${projectId}, trying by name: ${projectName}`);
+        project = await this.projectRepository.getProjectByName(projectName);
+      }
+
+      if (!project) {
+        console.warn(`Project not found: ${projectId}`);
         return [];
       }
-      
-      const channelRecordIds = record.fields.slack_channels || [];
-      if (!Array.isArray(channelRecordIds) || channelRecordIds.length === 0) {
-        return [];
+
+      const channels = project.slack_channels || [];
+
+      // For backward compatibility, return array of channel_id strings
+      // (index.js will fetch channel names via Slack API)
+      if (Array.isArray(channels)) {
+        return channels.map(ch => typeof ch === 'string' ? ch : ch.channel_id);
       }
-      
-      // Get the actual channel IDs from linked records
-      const channelIds = [];
-      for (const channelRecordId of channelRecordIds) {
-        try {
-          const channelRecord = await this.airtable('slack_channels').find(channelRecordId);
-          if (channelRecord && channelRecord.fields.channel_id) {
-            channelIds.push(channelRecord.fields.channel_id);
-          }
-        } catch (channelError) {
-          console.error(`Error getting channel record ${channelRecordId}:`, channelError.message);
-        }
-      }
-      
-      return channelIds;
+
+      return [];
+
     } catch (error) {
       console.error('Error getting Slack channels for project:', error.message);
       return [];
@@ -177,6 +193,7 @@ class AirtableIntegration {
             },
             value: JSON.stringify({
               projectId: projectId,
+              projectName: projectName,
               channelId: channel.id,
               fileId: fileId,
               fileName: fileData.fileName,
@@ -641,13 +658,23 @@ class AirtableIntegration {
   async getProjectList(logger) {
     try {
       logger.info(`Fetching projects from Airtable table: ${this.tableName}`);
-      const records = await this.airtable(this.tableName).select({
-        // すべてのフィールドを取得してデバッグ
-        maxRecords: 100,
-        view: 'Grid view'
-      }).all();
+      const response = await axios.get(
+        `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE}/${this.tableName}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.AIRTABLE_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          params: {
+            maxRecords: 100,
+            view: 'Grid view'
+          },
+          timeout: 10000
+        }
+      );
 
-      if (!records || records.length === 0) {
+      const records = response.data.records || [];
+      if (records.length === 0) {
         logger.warn('No projects found in Airtable.');
         return [];
       }
@@ -659,16 +686,18 @@ class AirtableIntegration {
       }
 
       const projectOptions = records.map(record => ({
-        text: record.get('Name') || record.id,
+        text: record.fields.Name || record.id,
         value: record.id,  // AirtableのレコードIDを使用
       }));
 
       return projectOptions;
     } catch (error) {
       console.error('Error fetching project list from Airtable:', error.message);
+      if (error.response && error.response.data) {
+        logger.error('Airtable API error:', error.response.data);
+      }
       logger.error('Airtable error details:', {
-        statusCode: error.statusCode,
-        error: error.error,
+        statusCode: error.response?.status,
         message: error.message,
         tableName: this.tableName,
         baseId: process.env.AIRTABLE_BASE
@@ -680,9 +709,9 @@ class AirtableIntegration {
   // Method to process the file with the selected project
   async processFileWithProject(action, body, client, logger, fileDataStore) {
     logger.info('processFileWithProject called with action.value:', action.value);
-    
+
     const actionData = JSON.parse(action.value);
-    const { projectId, projectName, fileId, fileName, classificationResult, channelId } = actionData;
+    const { projectId, projectName, fileId, fileName, classificationResult, channelId, summary: actionSummary, previousCommits } = actionData;
     const originalMessageTs = body.message.ts;
 
     logger.info('Parsed action data:', actionData);
@@ -693,16 +722,20 @@ class AirtableIntegration {
     }
 
     try {
-      // Find the Airtable record for the selected project
-      // projectIdはAirtableのレコードIDなので、直接取得
-      const projectRecord = await this.airtable(this.tableName).find(projectId);
+      // Get project details from DynamoDB
+      let project = await this.projectRepository.getProjectById(projectId);
 
-      if (!projectRecord) {
-        throw new Error(`Project with ID ${projectId} not found in Airtable.`);
+      // Fallback: try to find by name (for old Airtable IDs)
+      if (!project && projectName) {
+        logger.info(`Project not found by ID ${projectId}, trying by name: ${projectName}`);
+        project = await this.projectRepository.getProjectByName(projectName);
       }
 
-      // Get project details from Airtable
-      const projectFields = projectRecord.fields;
+      if (!project) {
+        throw new Error(`Project with ID ${projectId} not found`);
+      }
+
+      logger.info('Retrieved project from DynamoDB:', project);
       
       // Try to get file content from fileDataStore or re-download it
       let fileContent = null;
@@ -718,7 +751,7 @@ class AirtableIntegration {
           // If not in store, re-download the file
           logger.info('File not in store, re-downloading from Slack');
           const fileInfo = await client.files.info({ file: fileId });
-          
+
           if (fileInfo.file.content) {
             fileContent = fileInfo.file.content;
           } else if (fileInfo.file.url_private_download) {
@@ -732,6 +765,12 @@ class AirtableIntegration {
             fileContent = response.data;
           }
           logger.info('File content re-downloaded successfully');
+        }
+
+        // If summary not found in store, use summary from action value
+        if (!summary && actionSummary) {
+          summary = actionSummary;
+          logger.info('Summary restored from action.value');
         }
       } catch (error) {
         logger.error('Failed to get file content:', error);
@@ -786,10 +825,10 @@ class AirtableIntegration {
         project: {
           id: projectId,
           name: projectName,
-          owner: projectFields.owner,
-          repo: projectFields.repo,
-          path_prefix: projectFields.path_prefix,
-          branch: projectFields.branch || 'main'
+          owner: project.owner,
+          repo: project.repo,
+          path_prefix: project.path_prefix,
+          branch: project.branch || 'main'
         },
         classification: classificationResult,
         timestamp: new Date().toISOString()
@@ -835,8 +874,8 @@ class AirtableIntegration {
         
         if (!hasTemplateExpressions && n8nResponse.data.owner && n8nResponse.data.repo) {
           // Real data from n8n
-          const githubUrl = n8nResponse.data.commitUrl || 
-            `https://github.com/${n8nResponse.data.owner}/${n8nResponse.data.repo}/blob/${projectFields.branch || 'main'}/${n8nResponse.data.filePath}`;
+          const githubUrl = n8nResponse.data.commitUrl ||
+            `https://github.com/${n8nResponse.data.owner}/${n8nResponse.data.repo}/blob/${project.branch || 'main'}/${n8nResponse.data.filePath}`;
           
           statusText = 'ファイルをGitHubにコミットしました！';
           additionalInfo = `\n\n📄 GitHubに保存されました:\n• <${githubUrl}|${n8nResponse.data.filePath || formattedFileName}>`;
@@ -870,7 +909,7 @@ class AirtableIntegration {
         // n8n returned old format but workflow started successfully
         statusText = 'ファイルをn8nワークフローに送信しました！';
         // Construct estimated GitHub URL
-        const estimatedGithubUrl = `https://github.com/${projectFields.owner}/${projectFields.repo}/tree/${projectFields.branch || 'main'}/${projectFields.path_prefix}`;
+        const estimatedGithubUrl = `https://github.com/${project.owner}/${project.repo}/tree/${project.branch || 'main'}/${project.path_prefix}`;
         additionalInfo = `\n🔗 <${estimatedGithubUrl}|GitHubリポジトリを確認>`;
       } else if (n8nResponse) {
         // n8n returned but with error or unknown format
@@ -884,7 +923,7 @@ class AirtableIntegration {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${statusEmoji} ${statusText}${additionalInfo}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${projectFields.owner}/${projectFields.repo}\n📁 保存先: ${n8nResponse?.data?.filePath || projectFields.path_prefix + formattedFileName}`
+            text: `${statusEmoji} ${statusText}${additionalInfo}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${project.owner}/${project.repo}\n📁 保存先: ${n8nResponse?.data?.filePath || project.path_prefix + formattedFileName}`
           }
         }
       ];
@@ -895,13 +934,38 @@ class AirtableIntegration {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `💬 コミットメッセージ: ${n8nResponse.data.commitMessage}\n🌿 ブランチ: ${projectFields.branch || 'main'}`
+            text: `💬 コミットメッセージ: ${n8nResponse.data.commitMessage}\n🌿 ブランチ: ${project.branch || 'main'}`
           }
         });
       }
       
       confirmationBlocks.push({
         type: "divider"
+      });
+
+      // Add re-commit button
+      confirmationBlocks.push({
+        type: "actions",
+        elements: [{
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "🔄 別のプロジェクトに再コミット",
+            emoji: true
+          },
+          value: JSON.stringify({
+            fileId: fileId,
+            fileName: fileName,
+            summary: summary,
+            previousCommits: [{
+              project: projectName,
+              repo: `${project.owner}/${project.repo}`,
+              branch: project.branch || 'main'
+            }]
+          }),
+          action_id: "reselect_project_for_recommit",
+          style: "primary"
+        }]
       });
 
       // Get thread timestamp from file data store or body
