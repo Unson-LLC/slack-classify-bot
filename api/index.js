@@ -165,7 +165,7 @@ app.action(/select_project_.*/, async ({ ack, action, body, client, logger }) =>
     const { projectId, fileId, fileName, projectName, summary } = actionData;
     
     // Get Slack channels for the selected project
-    const slackChannels = await airtableIntegration.getSlackChannelsForProject(projectId);
+    const slackChannels = await airtableIntegration.getSlackChannelsForProject(projectId, projectName);
     logger.info(`Found ${slackChannels.length} Slack channels for project ${projectId}:`, slackChannels);
     
     if (slackChannels.length === 0) {
@@ -232,7 +232,7 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
     
     // Parse action data
     const actionData = JSON.parse(action.value);
-    const { projectId, channelId, fileId, fileName, summary } = actionData;
+    const { projectId, channelId, fileId, fileName, summary, projectName } = actionData;
     
     // Get channel name for display
     let channelName = channelId;
@@ -475,6 +475,7 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
           ...action,
           value: JSON.stringify({
             projectId,
+            projectName,
             fileId,
             fileName,
             channelId: body.channel.id,
@@ -603,8 +604,184 @@ app.action('change_project_selection', async ({ ack, action, body, client, logge
   }
 });
 
+// Retry File Processing Button Click
+app.action('retry_file_processing', async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('--- Retry File Processing Button Clicked ---');
+
+  try {
+    const actionData = JSON.parse(action.value);
+    const { fileId, fileName, channelId, userId, threadTs } = actionData;
+
+    logger.info(`Retrying file processing for: ${fileName} (${fileId})`);
+
+    // Get file data from store
+    const fileData = fileDataStore.get(fileId);
+    if (!fileData || !fileData.content) {
+      logger.error(`File data or content not found for file ID: ${fileId}`);
+      await client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: '❌ ファイルデータが見つかりませんでした。再度ファイルをアップロードしてください。'
+      });
+      return;
+    }
+
+    // Post retry message
+    await client.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: '🔄 処理を再試行しています...'
+    });
+
+    // Reconstruct message object for processFileUpload
+    const reconstructedMessage = {
+      files: [{
+        id: fileId,
+        name: fileName
+      }],
+      channel: channelId,
+      user: userId,
+      ts: threadTs,
+      thread_ts: threadTs
+    };
+
+    // Re-run processFileUpload
+    await processFileUpload(reconstructedMessage, client, logger, fileDataStore);
+
+  } catch (error) {
+    logger.error('Error retrying file processing:', error);
+    const actionData = JSON.parse(action.value);
+    await client.chat.postMessage({
+      channel: actionData.channelId,
+      thread_ts: actionData.threadTs,
+      text: `❌ 再試行中にエラーが発生しました: ${error.message}`
+    });
+  }
+});
+
+// Re-select Project for Re-commit Button Click
+app.action('reselect_project_for_recommit', async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('--- Re-select Project for Re-commit Button Clicked ---');
+
+  try {
+    const airtableIntegration = new AirtableIntegration();
+    const actionData = JSON.parse(action.value);
+    const { fileId, fileName, summary, previousCommits } = actionData;
+
+    logger.info(`Re-commit requested for file: ${fileName} (${fileId})`);
+    logger.info('Previous commits:', previousCommits);
+
+    // Get all projects
+    const projects = await airtableIntegration.getProjects();
+
+    if (!projects || projects.length === 0) {
+      await client.chat.postMessage({
+        channel: body.channel.id,
+        thread_ts: body.message.ts,
+        text: 'プロジェクトが見つかりませんでした。'
+      });
+      return;
+    }
+
+    // Create file data object
+    const fileData = {
+      fileName: fileName,
+      summary: summary,
+      channelId: body.channel.id,
+      classificationResult: {}
+    };
+
+    // Store file data (for later retrieval)
+    fileDataStore.set(fileId, fileData);
+    fileDataStore.set(`${fileId}_${body.channel.id}`, fileData);
+
+    // Create project selection blocks with previous commits info
+    const blocks = [];
+
+    // Header
+    blocks.push({
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "🔄 別のプロジェクトに再コミット",
+        emoji: true
+      }
+    });
+
+    // File info
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*ファイル名:* ${fileName}`
+      }
+    });
+
+    blocks.push({ type: "divider" });
+
+    // Previous commits info
+    if (previousCommits && previousCommits.length > 0) {
+      const previousCommitsText = previousCommits.map(commit =>
+        `• ${commit.project} → ${commit.repo} (${commit.branch})`
+      ).join('\n');
+
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*📋 既にコミット済み:*\n${previousCommitsText}`
+        }
+      });
+
+      blocks.push({ type: "divider" });
+    }
+
+    // Project selection
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "🎯 *別のプロジェクトを選択してください*"
+      }
+    });
+
+    // Add project buttons
+    const projectBlocks = airtableIntegration.createProjectSelectionBlocks(projects, fileId, fileData);
+    const actionBlocks = projectBlocks.filter(block => block.type === 'actions');
+    blocks.push(...actionBlocks);
+
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: blocks,
+      text: '別のプロジェクトを選択してください。'
+    });
+
+    logger.info('Successfully showed project selection for re-commit');
+
+  } catch (error) {
+    logger.error('Error handling reselect project for recommit:', error);
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "❌ *エラー*\n\nプロジェクト選択画面の表示中にエラーが発生しました。"
+          }
+        }
+      ],
+      text: 'プロジェクト選択エラー'
+    });
+  }
+});
+
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|cancel_).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|cancel_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);
