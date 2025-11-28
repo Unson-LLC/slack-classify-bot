@@ -3,6 +3,61 @@ const { BedrockRuntimeClient, InvokeModelCommand } = require("@aws-sdk/client-be
 // Force region to us-east-1 - Claude Sonnet 4 and 3.7 are available here
 const BEDROCK_REGION = "us-east-1";
 
+// Sonnet 4.5 inference profile for US regions (supports us-east-1)
+const DEFAULT_MODEL_ID = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
+const FALLBACK_MODEL_ID = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+
+const resolveModelId = () => process.env.BEDROCK_MODEL_ID || DEFAULT_MODEL_ID;
+
+async function invokeBedrock(payload, initialModelId) {
+  const modelId = initialModelId || resolveModelId();
+
+  const send = async (model) => {
+    const requestClient = new BedrockRuntimeClient({
+      region: BEDROCK_REGION,
+      endpoint: `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com`,
+      credentials: undefined
+    });
+
+    const command = new InvokeModelCommand({
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+      modelId: model,
+    });
+
+    const apiResponse = await requestClient.send(command);
+    const decoded = new TextDecoder().decode(apiResponse.body);
+    return JSON.parse(decoded);
+  };
+
+  try {
+    return await send(modelId);
+  } catch (error) {
+    const message = error?.message || '';
+    const shouldFallback = (
+      modelId !== FALLBACK_MODEL_ID &&
+      (
+        error.name === 'AccessDeniedException' ||
+        error.name === 'ValidationException' ||
+        message.includes('Marketplace') ||
+        message.includes('throughput isn’t supported')
+      )
+    );
+
+    if (shouldFallback) {
+      console.warn(`Primary model ${modelId} failed with ${error.name}. Falling back to ${FALLBACK_MODEL_ID}`);
+      try {
+        return await send(FALLBACK_MODEL_ID);
+      } catch (fallbackError) {
+        console.error('Fallback Bedrock call failed:', fallbackError);
+        throw fallbackError;
+      }
+    }
+
+    throw error;
+  }
+}
+
 // DO NOT create global client - create fresh client for each request
 
 /**
@@ -20,7 +75,7 @@ async function summarizeText(text) {
   const truncatedText = text.length > maxChars ? text.substring(0, maxChars) : text;
 
   // Use Claude Sonnet 4 via inference profile
-  const modelId = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+  const modelId = resolveModelId();
   
   // Log the exact configuration being used
   console.log('=== BEDROCK CALL DEBUG ===');
@@ -55,33 +110,9 @@ ${truncatedText}
     }]
   };
 
-  // Log the command being sent
-  console.log('InvokeModelCommand parameters:');
-  console.log('- contentType:', 'application/json');
-  console.log('- modelId:', modelId);
-  console.log('- payload keys:', Object.keys(payload));
-
-  // Create bedrock client with COMPLETE configuration override
-  const requestClient = new BedrockRuntimeClient({
-    region: BEDROCK_REGION,
-    // Completely override all configuration
-    endpoint: `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com`,
-    // Use default credentials from Lambda execution role
-    credentials: undefined
-  });
-
-  const command = new InvokeModelCommand({
-    contentType: "application/json",
-    body: JSON.stringify(payload),
-    modelId,
-  });
-
   try {
-    console.log('Sending request to Bedrock with fresh client...');
-    const apiResponse = await requestClient.send(command);
-    const decoded = new TextDecoder().decode(apiResponse.body);
-    const responseBody = JSON.parse(decoded);
-    
+    const responseBody = await invokeBedrock(payload, modelId);
+
     if (responseBody.content && responseBody.content.length > 0) {
       return responseBody.content[0].text;
     } else {
@@ -107,7 +138,7 @@ async function generateFilename(text) {
   // Take first 2000 chars for filename generation
   const truncatedText = text.length > 2000 ? text.substring(0, 2000) : text;
 
-  const modelId = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+  const modelId = resolveModelId();
   
   const prompt = `以下の会議議事録の内容から、GitHubに保存する際の短いファイル名を生成してください。
 
@@ -135,22 +166,8 @@ ${truncatedText}
     }]
   };
 
-  const requestClient = new BedrockRuntimeClient({
-    region: BEDROCK_REGION,
-    endpoint: `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com`,
-    credentials: undefined
-  });
-
-  const command = new InvokeModelCommand({
-    contentType: "application/json",
-    body: JSON.stringify(payload),
-    modelId,
-  });
-
   try {
-    const apiResponse = await requestClient.send(command);
-    const decoded = new TextDecoder().decode(apiResponse.body);
-    const responseBody = JSON.parse(decoded);
+    const responseBody = await invokeBedrock(payload, modelId);
     
     if (responseBody.content && responseBody.content.length > 0) {
       // Clean the generated filename
@@ -185,7 +202,7 @@ async function generateMeetingMinutes(text) {
   const maxChars = 180000;
   const truncatedText = text.length > maxChars ? text.substring(0, maxChars) : text;
 
-  const modelId = 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+  const modelId = resolveModelId();
   
   const prompt = `以下の文字起こしデータから、Slack投稿用の質の高い議事録を作成してください。
 
@@ -232,25 +249,9 @@ ${truncatedText}
     }]
   };
 
-  // Create bedrock client with COMPLETE configuration override
-  const requestClient = new BedrockRuntimeClient({
-    region: BEDROCK_REGION,
-    endpoint: `https://bedrock-runtime.${BEDROCK_REGION}.amazonaws.com`,
-    credentials: undefined
-  });
-
-  const command = new InvokeModelCommand({
-    contentType: "application/json",
-    body: JSON.stringify(payload),
-    modelId,
-  });
-
   try {
-    console.log('Generating meeting minutes with Bedrock...');
-    const apiResponse = await requestClient.send(command);
-    const decoded = new TextDecoder().decode(apiResponse.body);
-    const responseBody = JSON.parse(decoded);
-    
+    const responseBody = await invokeBedrock(payload, modelId);
+
     if (responseBody.content && responseBody.content.length > 0) {
       return responseBody.content[0].text;
     } else {

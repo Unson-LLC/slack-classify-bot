@@ -22,3 +22,4 @@ process.env.AIRTABLE_TABLE_NAME = 'TestProjects';
 process.env.BEDROCK_REGION = 'us-east-1';
 process.env.BEDROCK_ACCESS_KEY_ID = 'test-key-id';
 process.env.BEDROCK_SECRET_ACCESS_KEY = 'test-secret-key';
+process.env.BEDROCK_MODEL_ID = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';

@@ -44,7 +44,7 @@ describe('llm-integration', () => {
       expect(bedrockMock.commandCalls(InvokeModelCommand)).toHaveLength(1);
       
       const call = bedrockMock.commandCalls(InvokeModelCommand)[0];
-      expect(call.args[0].input.modelId).toBe('us.anthropic.claude-sonnet-4-20250514-v1:0');
+      expect(call.args[0].input.modelId).toBe(process.env.BEDROCK_MODEL_ID);
       expect(call.args[0].input.contentType).toBe('application/json');
     });
 
@@ -85,7 +85,9 @@ describe('llm-integration', () => {
       await summarizeText('テストテキスト');
 
       // Verify that the client was created with the correct region
-      expect(bedrockMock.clients[0].config.region).toBe('us-east-1');
+      const call = bedrockMock.commandCalls(InvokeModelCommand)[0];
+      const resolvedRegion = await call.thisValue.config.region();
+      expect(resolvedRegion).toBe('us-east-1');
     });
 
     it('should handle Bedrock API errors gracefully', async () => {

@@ -58,8 +58,8 @@ function isDuplicateEvent(eventId) {
 - アクションアイテムの抽出
 - ファイル名の生成
 
-**使用モデル**:
-- Claude Sonnet 4 (`us.anthropic.claude-sonnet-4-20250514-v1:0`)
+- **使用モデル**:
+- Claude Sonnet 4.5 (デフォルト: `us.anthropic.claude-sonnet-4-5-20250929-v1:0` 推論プロファイル、環境変数`BEDROCK_MODEL_ID`で上書き可)
 - リージョン: us-east-1（固定）
 
 **プロンプト構成**:

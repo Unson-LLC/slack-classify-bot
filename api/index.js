@@ -367,8 +367,32 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
             type: "section",
             text: {
               type: "mrkdwn",
-              text: "❌ *議事録生成に失敗しました*\n\nAIによる議事録の生成でエラーが発生しました。しばらく待ってから再度お試しください。"
+              text: "❌ *議事録生成に失敗しました*\n\nAIによる議事録の生成でエラーが発生しました。しばらく待ってから再試行してください。"
             }
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                style: "primary",
+                text: {
+                  type: "plain_text",
+                  text: "再試行する"
+                },
+                action_id: "retry_generate_minutes",
+                value: JSON.stringify({
+                  projectId,
+                  channelId,
+                  fileId,
+                  fileName,
+                  summary,
+                  projectName,
+                  messageTs: body.message.ts,
+                  sourceChannelId: body.channel.id
+                })
+              }
+            ]
           }
         ],
         text: '議事録生成に失敗しました'
@@ -519,6 +543,145 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
         }
       ],
       text: '処理中にエラーが発生しました'
+    });
+  }
+});
+
+// Retry meeting minutes generation
+app.action('retry_generate_minutes', async ({ ack, action, body, client, logger }) => {
+  await ack();
+
+  try {
+    const airtableIntegration = new AirtableIntegration();
+    const { generateMeetingMinutes } = require('./llm-integration');
+
+    const actionData = JSON.parse(action.value || '{}');
+    const { projectId, channelId, fileId, fileName, summary, projectName, messageTs, sourceChannelId } = actionData;
+
+    // Fallbacks
+    const updateChannel = sourceChannelId || body.channel.id;
+    const updateTs = messageTs || body.message?.ts;
+
+    // Indicate retry start
+    await client.chat.update({
+      channel: updateChannel,
+      ts: updateTs,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `🔄 *再試行中...*\n議事録を再生成しています。\n📄 ファイル: \`${fileName || 'unknown'}\``
+          }
+        }
+      ],
+      text: '議事録再生成を開始'
+    });
+
+    // Ensure file data is available
+    let fileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${updateChannel}`);
+
+    if (!fileData || !fileData.content) {
+      logger.info('File content not found in store during retry, attempting to re-download from Slack');
+
+      const fileInfo = await client.files.info({ file: fileId });
+      let fileContent = null;
+
+      if (fileInfo.file.content) {
+        fileContent = fileInfo.file.content;
+      } else if (fileInfo.file.url_private_download) {
+        const axios = require('axios');
+        const response = await axios.get(fileInfo.file.url_private_download, {
+          headers: { 'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}` },
+          responseType: 'text',
+          timeout: 30000
+        });
+        fileContent = response.data;
+      }
+
+      if (!fileContent) {
+        throw new Error('ファイルコンテンツの再取得に失敗しました');
+      }
+
+      fileData = { content: fileContent, fileName: fileName };
+      fileDataStore.set(fileId, fileData);
+      fileDataStore.set(`${fileId}_${updateChannel}`, fileData);
+    }
+
+    const meetingMinutes = await generateMeetingMinutes(fileData.content);
+
+    if (!meetingMinutes) {
+      throw new Error('再試行でも議事録生成に失敗しました');
+    }
+
+    // Post minutes to selected channel
+    const postResult = await airtableIntegration.postMinutesToChannel(
+      client,
+      channelId,
+      meetingMinutes,
+      fileName,
+      summary || fileData.summary
+    );
+
+    if (!postResult.success) {
+      throw new Error('議事録の投稿に失敗しました');
+    }
+
+    // Update status with success
+    const channelName = channelId;
+    await client.chat.update({
+      channel: updateChannel,
+      ts: updateTs,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `✅ *議事録生成完了*\n📢 投稿先: <#${channelId}>\n📄 ファイル: \`${fileName}\``
+          }
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "📤 *議事録を投稿しました。*"
+          }
+        }
+      ],
+      text: '議事録生成完了'
+    });
+
+  } catch (error) {
+    logger.error('Retry generate minutes failed:', error);
+
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `❌ *再試行に失敗しました*\n${error.message || '不明なエラーが発生しました。'}\n\nもう一度お試しください。`
+          }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              style: "primary",
+              text: { type: "plain_text", text: "もう一度再試行" },
+              action_id: "retry_generate_minutes",
+              value: action.value
+            }
+          ]
+        }
+      ],
+      text: '再試行に失敗しました'
     });
   }
 });

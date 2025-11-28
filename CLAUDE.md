@@ -9,7 +9,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Slackにアップロードされたテキストファイル（議事録など）を自動処理し、AI要約を生成してGitHubにコミットするLambda関数です。
+Slackにアップロードされたテキストファイル（議事録など）を自動処理し、n8nワークフローを通じてGitHubにコミットするAWS Lambdaベースのボットシステムです。
+
+### 主要機能
+- Slackファイル共有イベントの監視
+- プロジェクト情報の管理（DynamoDB）
+- n8nワークフローへのファイル転送
+- GitHubへの自動コミット（n8n経由）
 
 ## 開発方針
 
@@ -39,7 +45,57 @@ npm run deploy  # ルートディレクトリから
 
 # ログ確認
 aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region us-east-1
+
+# DynamoDB操作
+# 全プロジェクト取得
+aws dynamodb scan --table-name slack-classify-bot-projects --profile k.sato --region us-east-1
+
+# 特定プロジェクト取得
+aws dynamodb get-item --table-name slack-classify-bot-projects \
+  --key '{"project_id": {"S": "proj_aitle"}}' \
+  --profile k.sato --region us-east-1
+
+# プロジェクト更新
+aws dynamodb put-item --table-name slack-classify-bot-projects \
+  --item file:///tmp/project.json \
+  --profile k.sato --region us-east-1
 ```
+
+## プロジェクト構造
+
+```
+slack-classify-bot/
+├── api/                       # Lambda関数メインコード
+│   ├── app.js                # Slack Boltアプリケーション
+│   ├── project-repository.js # DynamoDBアクセス層
+│   ├── n8n-integration.js    # n8nワークフロー連携
+│   ├── deploy.sh             # デプロイスクリプト
+│   └── env.json.template     # 環境変数テンプレート
+├── lambda/                    # Lambda関数設定
+├── docs/                      # ドキュメント
+│   ├── architecture-details.md
+│   ├── testing-guidelines.md
+│   ├── deployment-guide.md
+│   ├── troubleshooting.md
+│   ├── SECURITY-ARCHITECTURE.md
+│   └── airtable-to-dynamodb-gap-analysis.md
+├── scripts/                   # ユーティリティスクリプト
+│   ├── seed-projects.js      # プロジェクト初期データ投入
+│   └── migrate-*.js          # データ移行スクリプト
+├── terraform/                 # インフラコード（使用停止中）
+└── README.md                  # プロジェクトREADME
+```
+
+## データストレージ
+
+### DynamoDB（現在）
+- **テーブル名**: `slack-classify-bot-projects`
+- **用途**: プロジェクト情報、リポジトリマッピング、Slackチャンネル設定
+- **主要フィールド**: `project_id`, `name`, `owner`, `repo`, `path_prefix`, `slack_channels`
+
+### Airtable（レガシー）
+- 2024年10月にDynamoDBへ完全移行済み
+- 参照: `docs/airtable-to-dynamodb-gap-analysis.md`
 
 ## ドキュメント構成
 
@@ -47,9 +103,9 @@ aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region 
 - **テストガイドライン**: `docs/testing-guidelines.md`
 - **デプロイメント手順**: `docs/deployment-guide.md`
 - **トラブルシューティング**: `docs/troubleshooting.md`
-- **セキュリティ設計**: `SECURITY-ARCHITECTURE.md`
-- **Airtableスキーマ**: `README-Airtable.md`
-
+- **セキュリティ設計**: `docs/SECURITY-ARCHITECTURE.md`
+- **DynamoDB移行設計**: `docs/airtable-to-dynamodb-gap-analysis.md`
+- **Airtableスキーマ（レガシー）**: `docs/README-Airtable.md`
 
 ## 重要な開発指針
 
