@@ -180,7 +180,7 @@ class AirtableIntegration {
     if (channels.length > 0) {
       // Add channel buttons with max 5 per row
       const channelChunks = this.chunkArray(channels, 5);
-      
+
       channelChunks.forEach(chunk => {
         const actionBlock = {
           type: "actions",
@@ -208,10 +208,28 @@ class AirtableIntegration {
       });
     }
 
-    // Add cancel button
+    // Add "GitHub only" and cancel buttons
     blocks.push({
       type: "actions",
       elements: [
+        {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "📦 GitHubのみ（Slack投稿しない）",
+            emoji: true
+          },
+          value: JSON.stringify({
+            projectId: projectId,
+            projectName: projectName,
+            fileId: fileId,
+            fileName: fileData.fileName,
+            channelId: fileData.channelId,
+            classificationResult: fileData.classificationResult,
+            summary: fileData.summary
+          }),
+          action_id: "skip_channel_github_only"
+        },
         {
           type: "button",
           text: {
@@ -293,8 +311,33 @@ class AirtableIntegration {
         blocks: summaryBlocks
       });
 
-      // Then post the detailed minutes as a thread reply
-      const detailBlocks = [
+      // Then post the detailed minutes as thread replies
+      // Split long text into chunks to respect Slack's 3000 char limit per block
+      const MAX_BLOCK_TEXT_LENGTH = 2900; // Leave some buffer
+      const minutesChunks = [];
+      let remainingText = minutes;
+
+      while (remainingText.length > 0) {
+        if (remainingText.length <= MAX_BLOCK_TEXT_LENGTH) {
+          minutesChunks.push(remainingText);
+          break;
+        }
+
+        // Find a good breaking point (newline or space)
+        let breakPoint = remainingText.lastIndexOf('\n', MAX_BLOCK_TEXT_LENGTH);
+        if (breakPoint === -1 || breakPoint < MAX_BLOCK_TEXT_LENGTH / 2) {
+          breakPoint = remainingText.lastIndexOf(' ', MAX_BLOCK_TEXT_LENGTH);
+        }
+        if (breakPoint === -1 || breakPoint < MAX_BLOCK_TEXT_LENGTH / 2) {
+          breakPoint = MAX_BLOCK_TEXT_LENGTH;
+        }
+
+        minutesChunks.push(remainingText.substring(0, breakPoint));
+        remainingText = remainingText.substring(breakPoint).trim();
+      }
+
+      // Post first chunk with header
+      const firstChunkBlocks = [
         {
           type: "section",
           text: {
@@ -309,26 +352,73 @@ class AirtableIntegration {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: minutes
+            text: minutesChunks[0]
           }
-        },
-        {
+        }
+      ];
+
+      // Add continuation notice if there are more chunks
+      if (minutesChunks.length > 1) {
+        firstChunkBlocks.push({
           type: "context",
           elements: [
             {
               type: "mrkdwn",
-              text: `🤖 _この議事録はAIにより自動生成されました。必要に応じて内容をご確認ください。_`
+              text: `📜 _続きがあります（${minutesChunks.length}件中 1件目）_`
             }
           ]
-        }
-      ];
+        });
+      }
 
       const detailResponse = await client.chat.postMessage({
         channel: channelId,
-        thread_ts: summaryResponse.ts, // Post as thread reply
+        thread_ts: summaryResponse.ts,
         text: `📄 詳細議事録: ${fileName}`,
-        blocks: detailBlocks
+        blocks: firstChunkBlocks
       });
+
+      // Post remaining chunks
+      for (let i = 1; i < minutesChunks.length; i++) {
+        const isLast = i === minutesChunks.length - 1;
+        const chunkBlocks = [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: minutesChunks[i]
+            }
+          }
+        ];
+
+        if (isLast) {
+          chunkBlocks.push({
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `🤖 _この議事録はAIにより自動生成されました。必要に応じて内容をご確認ください。_`
+              }
+            ]
+          });
+        } else {
+          chunkBlocks.push({
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `📜 _続き（${minutesChunks.length}件中 ${i + 1}件目）_`
+              }
+            ]
+          });
+        }
+
+        await client.chat.postMessage({
+          channel: channelId,
+          thread_ts: summaryResponse.ts,
+          text: `📄 詳細議事録（続き ${i + 1}/${minutesChunks.length}）`,
+          blocks: chunkBlocks
+        });
+      }
 
       return {
         success: true,

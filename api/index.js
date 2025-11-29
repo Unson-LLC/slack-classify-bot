@@ -243,7 +243,7 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
       logger.warn(`Failed to get channel name for ${channelId}:`, error.message);
     }
     
-    // Immediately show processing message
+    // Immediately show processing message with cancel button
     await client.chat.update({
       channel: body.channel.id,
       ts: body.message.ts,
@@ -264,6 +264,28 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
             type: "mrkdwn",
             text: "🤖 *議事録を生成中...*\n\n⏳ AIが文字起こしデータから議事録を作成しています。\n少々お待ちください。"
           }
+        },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: {
+                type: "plain_text",
+                text: "← チャンネル選択に戻る"
+              },
+              action_id: "back_to_channel_selection",
+              value: JSON.stringify({
+                projectId,
+                projectName,
+                fileId,
+                fileName,
+                classificationResult: actionData.classificationResult,
+                summary,
+                sourceChannelId: body.channel.id
+              })
+            }
+          ]
         }
       ],
       text: '議事録を生成中...'
@@ -354,9 +376,9 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
       }
     }
     
-    // Generate meeting minutes
-    const meetingMinutes = await generateMeetingMinutes(fileData.content);
-    
+    // Generate meeting minutes with brainbase context
+    const meetingMinutes = await generateMeetingMinutes(fileData.content, projectName);
+
     if (!meetingMinutes) {
       logger.error('Failed to generate meeting minutes');
       await client.chat.update({
@@ -523,6 +545,28 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
               type: "mrkdwn",
               text: `❌ *議事録投稿に失敗しました*\n\n📢 投稿先: #${channelName}\n📄 ファイル: \`${fileName}\`\n\n⚠️ エラー: ${postResult.error}`
             }
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "← チャンネル選択に戻る"
+                },
+                action_id: "back_to_channel_selection",
+                value: JSON.stringify({
+                  projectId,
+                  projectName,
+                  fileId,
+                  fileName,
+                  classificationResult: actionData.classificationResult,
+                  summary,
+                  sourceChannelId: body.channel.id
+                })
+              }
+            ]
           }
         ],
         text: '議事録投稿に失敗しました'
@@ -530,6 +574,37 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
     }
   } catch (error) {
     logger.error('Error processing channel selection:', error);
+
+    // Try to parse action data for back button
+    let backButtonBlock = [];
+    try {
+      const actionData = JSON.parse(action.value);
+      backButtonBlock = [{
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "← チャンネル選択に戻る"
+            },
+            action_id: "back_to_channel_selection",
+            value: JSON.stringify({
+              projectId: actionData.projectId,
+              projectName: actionData.projectName,
+              fileId: actionData.fileId,
+              fileName: actionData.fileName,
+              classificationResult: actionData.classificationResult,
+              summary: actionData.summary,
+              sourceChannelId: body.channel.id
+            })
+          }
+        ]
+      }];
+    } catch (e) {
+      // If we can't parse action data, skip the back button
+    }
+
     await client.chat.update({
       channel: body.channel.id,
       ts: body.message.ts,
@@ -539,6 +614,88 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
           text: {
             type: "mrkdwn",
             text: "❌ *処理中にエラーが発生しました*\n\nチャネル選択の処理でエラーが発生しました。しばらく待ってから再度お試しください。"
+          }
+        },
+        ...backButtonBlock
+      ],
+      text: '処理中にエラーが発生しました'
+    });
+  }
+});
+
+// Skip channel posting - GitHub only
+app.action('skip_channel_github_only', async ({ ack, action, body, client, logger }) => {
+  logger.info('=== SKIP CHANNEL (GITHUB ONLY) ACTION HANDLER ===');
+  logger.info('Action ID:', action.action_id);
+  logger.info('Action value:', action.value);
+
+  await ack();
+  logger.info('--- Skip Channel, GitHub Only Button Clicked ---');
+
+  try {
+    const airtableIntegration = new AirtableIntegration();
+
+    // Parse action data
+    const actionData = JSON.parse(action.value);
+    const { projectId, projectName, fileId, fileName, summary } = actionData;
+
+    // Show processing message
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `📦 *GitHubのみモード*\n📄 ファイル: \`${fileName}\`\n📂 プロジェクト: *${projectName}*`
+          }
+        },
+        {
+          type: "divider"
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "🔄 *GitHubコミット処理を開始中...*\n\n⏳ Slackへの投稿をスキップし、GitHubリポジトリに直接コミットしています。"
+          }
+        }
+      ],
+      text: 'GitHubコミット処理中...'
+    });
+
+    // Proceed directly with GitHub workflow (skip channel posting)
+    await airtableIntegration.processFileWithProject(
+      {
+        ...action,
+        value: JSON.stringify({
+          projectId,
+          projectName,
+          fileId,
+          fileName,
+          channelId: body.channel.id,
+          classificationResult: actionData.classificationResult,
+          summary: summary
+        })
+      },
+      body,
+      client,
+      logger,
+      fileDataStore
+    );
+
+  } catch (error) {
+    logger.error('Error processing GitHub-only action:', error);
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "❌ *処理中にエラーが発生しました*\n\nGitHubへのコミット処理でエラーが発生しました。しばらく待ってから再度お試しください。"
           }
         }
       ],
@@ -608,7 +765,7 @@ app.action('retry_generate_minutes', async ({ ack, action, body, client, logger 
       fileDataStore.set(`${fileId}_${updateChannel}`, fileData);
     }
 
-    const meetingMinutes = await generateMeetingMinutes(fileData.content);
+    const meetingMinutes = await generateMeetingMinutes(fileData.content, projectName);
 
     if (!meetingMinutes) {
       throw new Error('再試行でも議事録生成に失敗しました');
@@ -943,8 +1100,99 @@ app.action('reselect_project_for_recommit', async ({ ack, action, body, client, 
   }
 });
 
+// Back to Channel Selection Button Click
+app.action('back_to_channel_selection', async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('--- Back to Channel Selection Button Clicked ---');
+
+  try {
+    const airtableIntegration = new AirtableIntegration();
+    const actionData = JSON.parse(action.value);
+    const { projectId, projectName, fileId, fileName, classificationResult, summary, sourceChannelId } = actionData;
+
+    // Get Slack channels for the project
+    const slackChannels = await airtableIntegration.getSlackChannelsForProject(projectId, projectName);
+    logger.info(`Found ${slackChannels.length} Slack channels for project ${projectId}`);
+
+    if (slackChannels.length === 0) {
+      await client.chat.update({
+        channel: body.channel.id,
+        ts: body.message.ts,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "⚠️ *チャンネルが設定されていません*\n\nこのプロジェクトにはSlackチャンネルが設定されていません。"
+            }
+          }
+        ],
+        text: 'チャンネルが設定されていません'
+      });
+      return;
+    }
+
+    // Get channel names for better display
+    const channelInfos = [];
+    for (const channelId of slackChannels) {
+      try {
+        const channelInfo = await client.conversations.info({ channel: channelId });
+        channelInfos.push({
+          id: channelId,
+          name: channelInfo.channel.name || channelId
+        });
+      } catch (error) {
+        logger.warn(`Failed to get channel info for ${channelId}:`, error.message);
+        channelInfos.push({
+          id: channelId,
+          name: channelId
+        });
+      }
+    }
+
+    // Show channel selection UI
+    const channelBlocks = airtableIntegration.createChannelSelectionBlocks(
+      channelInfos,
+      projectId,
+      fileId,
+      {
+        fileName,
+        channelId: sourceChannelId || body.channel.id,
+        classificationResult: classificationResult || {},
+        summary: summary
+      },
+      projectName
+    );
+
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: channelBlocks,
+      text: 'チャネルを選択してください。'
+    });
+
+    logger.info('Successfully returned to channel selection screen');
+  } catch (error) {
+    logger.error('Error handling back to channel selection:', error);
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "❌ *エラー*\n\nチャンネル選択画面の表示中にエラーが発生しました。"
+          }
+        }
+      ],
+      text: 'チャンネル選択エラー'
+    });
+  }
+});
+
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|cancel_).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);
