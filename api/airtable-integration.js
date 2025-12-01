@@ -1,6 +1,7 @@
 const axios = require('axios');
 const Airtable = require('airtable');
 const ProjectRepository = require('./project-repository');
+const GitHubIntegration = require('./github-integration');
 
 class AirtableIntegration {
   constructor() {
@@ -890,160 +891,105 @@ class AirtableIntegration {
         aiGeneratedName = baseFileName;
       }
       
-      // Create formatted filename: YYYY-MM-DD_meaningful-name.md
-      const formattedFileName = `${dateStr}_${aiGeneratedName}.md`;
-      
-      // Create formatted content with summary at the top
-      let formattedContent = fileContent;
-      if (summary) {
-        // Prepend summary to the content
-        formattedContent = `# 議事録: ${aiGeneratedName}\n\n${summary}\n\n---\n\n## 議事録原文\n\n${fileContent}`;
+      // Create formatted filename base (without extension)
+      const formattedBaseName = aiGeneratedName;
+
+      // Generate detailed meeting minutes using AI
+      let detailedMinutes = null;
+      if (fileContent) {
+        try {
+          const { generateMeetingMinutes } = require('./llm-integration');
+          detailedMinutes = await generateMeetingMinutes(fileContent, projectName);
+          logger.info('AI generated detailed meeting minutes');
+        } catch (error) {
+          logger.error('Failed to generate meeting minutes with AI:', error);
+        }
       }
-      
-      // Prepare payload for n8n workflow
-      const n8nPayload = {
-        type: 'file_processing',
-        file: {
-          id: fileId,
-          name: fileName,
-          formattedName: formattedFileName,  // Add formatted filename
-          channel: channelId,
-          content: formattedContent,  // Include formatted content with summary
-          originalContent: fileContent,  // Keep original content too
-          summary: summary  // Include summary separately
-        },
-        project: {
-          id: projectId,
-          name: projectName,
+
+      logger.info('Committing to GitHub with two-layer structure (minutes + transcript)');
+
+      // Commit to GitHub using two-layer structure
+      let githubResponse = null;
+
+      try {
+        const github = new GitHubIntegration();
+        githubResponse = await github.commitMeetingRecords({
           owner: project.owner,
           repo: project.repo,
-          path_prefix: project.path_prefix,
-          branch: project.branch || 'main'
-        },
-        classification: classificationResult,
-        timestamp: new Date().toISOString()
-      };
-
-      logger.info('Sending to n8n workflow:', n8nPayload);
-
-      // Send to n8n workflow
-      const n8nEndpoint = process.env.N8N_AIRTABLE_ENDPOINT || process.env.N8N_ENDPOINT;
-      let n8nResponse = null;
-      
-      try {
-        const response = await axios.post(
-          `${n8nEndpoint}/slack-airtable`,
-          n8nPayload,
-          {
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            timeout: 30000
-          }
-        );
-
-        // Log the full response for debugging
-        logger.info('n8n HTTP response status:', response.status);
-        logger.info('n8n HTTP response headers:', response.headers);
-        logger.info('n8n response.data type:', typeof response.data);
-        logger.info('n8n response.data:', response.data);
-
-        n8nResponse = response.data;
-
-        if (!n8nResponse) {
-          logger.warn('n8n returned empty response.data');
-        }
-      } catch (n8nError) {
-        logger.error('Failed to send to n8n workflow:', n8nError.message);
-        logger.error('n8n error details:', {
-          message: n8nError.message,
-          code: n8nError.code,
-          response: n8nError.response ? {
-            status: n8nError.response.status,
-            statusText: n8nError.response.statusText,
-            data: n8nError.response.data
-          } : 'No response'
+          branch: project.branch || 'main',
+          pathPrefix: project.path_prefix,
+          dateStr: dateStr,
+          baseName: formattedBaseName,
+          transcript: fileContent,
+          minutes: detailedMinutes,
+          summary: summary
         });
-        logger.info('n8n endpoint attempted:', `${n8nEndpoint}/slack-airtable`);
-        // Continue execution even if n8n fails
+
+        logger.info('GitHub commit response:', githubResponse);
+
+        if (!githubResponse.success) {
+          logger.warn('GitHub commit had errors:', githubResponse.errors);
+        }
+      } catch (githubError) {
+        logger.error('Failed to commit to GitHub:', githubError.message);
+        logger.error('GitHub error details:', {
+          message: githubError.message,
+          stack: githubError.stack
+        });
       }
 
       // Update the original Slack message to show confirmation
-      // Check for both new format (status: success) and old format (message: Workflow was started)
-      const isWorkflowStarted = n8nResponse && (n8nResponse.message === 'Workflow was started' || n8nResponse.message === 'workflow started');
-      const isSuccess = n8nResponse && (n8nResponse.status === 'success' || isWorkflowStarted);
+      const isSuccess = githubResponse && githubResponse.success;
       const statusEmoji = isSuccess ? '✅' : '⚠️';
       let statusText = '';
       let additionalInfo = '';
-      
-      // Check if we got a detailed response with GitHub info
-      if (n8nResponse && n8nResponse.data && n8nResponse.status === 'success') {
-        // Check if data contains actual values or template expressions
-        const hasTemplateExpressions = n8nResponse.data.owner && n8nResponse.data.owner.includes('{{');
-        
-        if (!hasTemplateExpressions && n8nResponse.data.owner && n8nResponse.data.repo) {
-          // Real data from n8n
-          const githubUrl = n8nResponse.data.commitUrl ||
-            `https://github.com/${n8nResponse.data.owner}/${n8nResponse.data.repo}/blob/${project.branch || 'main'}/${n8nResponse.data.filePath}`;
-          
-          statusText = 'ファイルをGitHubにコミットしました！';
-          additionalInfo = `\n\n📄 GitHubに保存されました:\n• <${githubUrl}|${n8nResponse.data.filePath || formattedFileName}>`;
-          
-          if (n8nResponse.data.commitMessage) {
-            additionalInfo += `\n💬 ${n8nResponse.data.commitMessage}`;
-          }
-        } else {
-          // n8n returned template expressions - show success but warn about configuration
-          statusText = 'ファイルをGitHubに送信しました！';
-          additionalInfo = '\n\n⚠️ n8nのWebhookレスポンス設定を確認してください（テンプレート変数が評価されていません）';
-          logger.warn('n8n returned unevaluated template expressions:', n8nResponse.data);
-        }
-      } else if (n8nResponse && n8nResponse.github && n8nResponse.github.commit) {
-        // Old format with GitHub info
-        const githubInfo = n8nResponse.github;
-        const commitUrl = `https://github.com/${githubInfo.owner}/${githubInfo.repo}/commit/${githubInfo.commit.sha}`;
-        const fileUrl = `https://github.com/${githubInfo.owner}/${githubInfo.repo}/blob/${githubInfo.commit.sha}/${githubInfo.file_path}`;
-        
+
+      if (isSuccess) {
         statusText = 'ファイルをGitHubにコミットしました！';
-        additionalInfo = `\n\n📄 GitHubに保存されました:\n• <${fileUrl}|${githubInfo.file_path}>\n• <${commitUrl}|コミット: ${githubInfo.commit.sha.substring(0, 7)}>`;
-      } else if (n8nResponse && n8nResponse.error) {
-        // Handle error responses from n8n
-        logger.error('n8n returned error:', n8nResponse.error);
-        statusText = 'GitHubへの保存中にエラーが発生しました';
-        additionalInfo = `\n\n⚠️ エラー: ${n8nResponse.error.message || 'Unknown error'}`;
-        if (n8nResponse.error.details) {
-          additionalInfo += `\n詳細: ${n8nResponse.error.details}`;
+
+        const minutesUrl = githubResponse.minutes?.fileUrl ||
+          `https://github.com/${project.owner}/${project.repo}/blob/${project.branch || 'main'}/${githubResponse.paths.minutes}`;
+        const transcriptUrl = githubResponse.transcript?.fileUrl ||
+          `https://github.com/${project.owner}/${project.repo}/blob/${project.branch || 'main'}/${githubResponse.paths.transcript}`;
+
+        additionalInfo = `\n\n📄 *二層構造で保存されました:*\n• <${minutesUrl}|📝 議事録 (minutes)>\n• <${transcriptUrl}|📜 トランスクリプト (transcript)>`;
+
+        if (githubResponse.minutes?.commitUrl) {
+          additionalInfo += `\n\n🔗 <${githubResponse.minutes.commitUrl}|コミットを確認>`;
         }
-      } else if (isWorkflowStarted) {
-        // n8n returned old format but workflow started successfully
-        statusText = 'ファイルをn8nワークフローに送信しました！';
-        // Construct estimated GitHub URL
-        const estimatedGithubUrl = `https://github.com/${project.owner}/${project.repo}/tree/${project.branch || 'main'}/${project.path_prefix}`;
-        additionalInfo = `\n🔗 <${estimatedGithubUrl}|GitHubリポジトリを確認>`;
-      } else if (n8nResponse) {
-        // n8n returned but with error or unknown format
-        statusText = n8nResponse.message || 'ファイルをn8nワークフローに送信しました！';
+      } else if (githubResponse && githubResponse.errors.length > 0) {
+        statusText = 'GitHubへの保存中に一部エラーが発生しました';
+        additionalInfo = `\n\n⚠️ エラー:\n${githubResponse.errors.map(e => `• ${e.type}: ${e.error}`).join('\n')}`;
+
+        // Show partial success
+        if (githubResponse.minutes) {
+          additionalInfo += `\n\n✅ 議事録は保存されました: <${githubResponse.minutes.fileUrl}|確認>`;
+        }
+        if (githubResponse.transcript) {
+          additionalInfo += `\n✅ トランスクリプトは保存されました: <${githubResponse.transcript.fileUrl}|確認>`;
+        }
       } else {
-        statusText = 'プロジェクトを選択しました（n8nへの送信は失敗しました）';
+        statusText = 'GitHubへの保存に失敗しました';
+        additionalInfo = '\n\n⚠️ GITHUB_TOKEN の設定を確認してください';
       }
-      
+
       const confirmationBlocks = [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `${statusEmoji} ${statusText}${additionalInfo}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${project.owner}/${project.repo}\n📁 保存先: ${n8nResponse?.data?.filePath || project.path_prefix + formattedFileName}`
+            text: `${statusEmoji} ${statusText}${additionalInfo}\n\n🎯 プロジェクト: ${projectName}\n📂 ファイル: ${fileName}\n🔧 リポジトリ: ${project.owner}/${project.repo}\n📁 保存先: ${project.path_prefix}minutes/ & transcripts/`
           }
         }
       ];
-      
+
       // Add commit details if available
-      if (n8nResponse?.data?.commitMessage) {
+      if (isSuccess) {
         confirmationBlocks.push({
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `💬 コミットメッセージ: ${n8nResponse.data.commitMessage}\n🌿 ブランチ: ${project.branch || 'main'}`
+            text: `🌿 ブランチ: ${project.branch || 'main'}\n📋 *二層構造*: 議事録はbrainbaseのアクティブデータ、トランスクリプトは原本アーカイブとして保存`
           }
         });
       }

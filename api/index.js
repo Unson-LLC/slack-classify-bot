@@ -167,51 +167,45 @@ app.action(/select_project_.*/, async ({ ack, action, body, client, logger }) =>
     // Get Slack channels for the selected project
     const slackChannels = await airtableIntegration.getSlackChannelsForProject(projectId, projectName);
     logger.info(`Found ${slackChannels.length} Slack channels for project ${projectId}:`, slackChannels);
-    
-    if (slackChannels.length === 0) {
-      // No channels configured, proceed with original workflow
-      logger.info('No Slack channels configured for project, proceeding with original workflow');
-      await airtableIntegration.processFileWithProject(action, body, client, logger, fileDataStore);
-    } else {
-      // Get channel names for better display
-      const channelInfos = [];
-      for (const channelId of slackChannels) {
-        try {
-          const channelInfo = await client.conversations.info({ channel: channelId });
-          channelInfos.push({
-            id: channelId,
-            name: channelInfo.channel.name || channelId
-          });
-        } catch (error) {
-          logger.warn(`Failed to get channel info for ${channelId}:`, error.message);
-          channelInfos.push({
-            id: channelId,
-            name: channelId
-          });
-        }
+
+    // Get channel names for better display
+    const channelInfos = [];
+    for (const channelId of slackChannels) {
+      try {
+        const channelInfo = await client.conversations.info({ channel: channelId });
+        channelInfos.push({
+          id: channelId,
+          name: channelInfo.channel.name || channelId
+        });
+      } catch (error) {
+        logger.warn(`Failed to get channel info for ${channelId}:`, error.message);
+        channelInfos.push({
+          id: channelId,
+          name: channelId
+        });
       }
-      
-      // Show channel selection UI
-      const channelBlocks = airtableIntegration.createChannelSelectionBlocks(
-        channelInfos,
-        projectId,
-        fileId,
-        { 
-          fileName, 
-          channelId: body.channel.id, 
-          classificationResult: actionData.classificationResult,
-          summary: summary // Use summary from button data
-        },
-        projectName
-      );
-      
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        blocks: channelBlocks,
-        text: 'チャネルを選択してください。'
-      });
     }
+
+    // Always show channel selection UI (even with 0 channels, shows "GitHub only" button)
+    const channelBlocks = airtableIntegration.createChannelSelectionBlocks(
+      channelInfos,
+      projectId,
+      fileId,
+      {
+        fileName,
+        channelId: body.channel.id,
+        classificationResult: actionData.classificationResult,
+        summary: summary
+      },
+      projectName
+    );
+
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: channelBlocks,
+      text: 'チャネルを選択してください。'
+    });
   } catch (error) {
     logger.error('Error processing project selection:', error);
   }

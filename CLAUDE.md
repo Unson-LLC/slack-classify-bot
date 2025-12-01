@@ -9,13 +9,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Slackにアップロードされたテキストファイル（議事録など）を自動処理し、n8nワークフローを通じてGitHubにコミットするAWS Lambdaベースのボットシステムです。
+Slackにアップロードされたテキストファイル（議事録など）を自動処理し、GitHub APIを使って直接GitHubにコミットするAWS Lambdaベースのボットシステムです。
 
 ### 主要機能
 - Slackファイル共有イベントの監視
 - プロジェクト情報の管理（DynamoDB）
-- n8nワークフローへのファイル転送
-- GitHubへの自動コミット（n8n経由）
+- AI（AWS Bedrock Claude）による要約・議事録生成
+- GitHubへの自動コミット（GitHub API直接、Octokit使用）
+
+### 二層構造（会議記録）
+会議記録は**議事録**と**トランスクリプト**の二層で保存されます：
+- `{path_prefix}minutes/YYYY-MM-DD_name.md` - 議事録（AI処理済み、brainbaseのアクティブデータ）
+- `{path_prefix}transcripts/YYYY-MM-DD_name.txt` - トランスクリプト（原本アーカイブ）
+
+議事録には `transcript_ref` で原本への参照が含まれます。
 
 ## 開発方針
 
@@ -66,12 +73,15 @@ aws dynamodb put-item --table-name slack-classify-bot-projects \
 ```
 slack-classify-bot/
 ├── api/                       # Lambda関数メインコード
+│   ├── index.js              # エントリポイント
 │   ├── app.js                # Slack Boltアプリケーション
 │   ├── project-repository.js # DynamoDBアクセス層
-│   ├── n8n-integration.js    # n8nワークフロー連携
+│   ├── github-integration.js # GitHub API連携（Octokit）★
+│   ├── llm-integration.js    # AWS Bedrock LLM連携
+│   ├── airtable-integration.js # ファイル処理・Slack UI
 │   ├── deploy.sh             # デプロイスクリプト
 │   └── env.json.template     # 環境変数テンプレート
-├── lambda/                    # Lambda関数設定
+├── lambda/                    # Lambda関数設定（レガシー）
 ├── docs/                      # ドキュメント
 │   ├── architecture-details.md
 │   ├── testing-guidelines.md
@@ -114,3 +124,12 @@ slack-classify-bot/
 
 ### 環境変数
 必須の環境変数は`api/env.json.template`を参照。デプロイ前に`api/env.json`として設定すること。
+
+**必須環境変数:**
+- `SLACK_BOT_TOKEN` - Slack Bot Token
+- `SLACK_SIGNING_SECRET` - Slack Signing Secret
+- `GITHUB_TOKEN` - GitHub Personal Access Token（リポジトリへの書き込み権限必須）
+- `AWS_REGION` - AWSリージョン（デフォルト: us-east-1）
+
+**オプション環境変数:**
+- `PROJECTS_TABLE_NAME` - DynamoDBテーブル名（デフォルト: slack-classify-bot-projects）

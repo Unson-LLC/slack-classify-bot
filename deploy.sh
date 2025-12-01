@@ -54,7 +54,23 @@ echo "[3/6] Creating deployment package..."
   -x "./.env" \
   -x "./.DS_Store" \
   -x "./coverage/*" \
-  -x "./__MACOSX/*")
+  -x "./__MACOSX/*" \
+  -x "*/README.md" \
+  -x "*/README*" \
+  -x "*/CHANGELOG*" \
+  -x "*/LICENSE*" \
+  -x "*/.eslintrc*" \
+  -x "*/.prettierrc*" \
+  -x "*/test/*" \
+  -x "*/tests/*" \
+  -x "*/__tests__/*" \
+  -x "*/docs/*" \
+  -x "*.md" \
+  -x "*.ts" \
+  -x "*.map" \
+  -x "./node_modules/@types/*" \
+  -x "./node_modules/aws-sdk/dist/*" \
+  -x "./node_modules/aws-sdk/scripts/*")
 echo "      - Done."
 
 # 4. Update Function Code

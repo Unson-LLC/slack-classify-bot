@@ -1,19 +1,20 @@
 /**
  * Design References:
  * - See docs/design/DYNAMODB-DEDUPLICATION-DESIGN.md for detailed design
- * 
+ *
  * Related Classes:
  * - index.js: Integrates this service for Slack event deduplication
  * - processFileUpload.js: Uses deduplication to prevent duplicate file processing
  */
 
-const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
+const AWS = require('aws-sdk');
+
+const dynamodb = new AWS.DynamoDB.DocumentClient({
+  region: process.env.AWS_REGION || 'us-east-1'
+});
 
 class EventDeduplicationService {
   constructor() {
-    const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
-    this.docClient = DynamoDBDocumentClient.from(client);
     this.tableName = process.env.DEDUP_TABLE_NAME || 'slack-classify-bot-processed-events';
     this.ttlHours = 6;
   }
@@ -21,7 +22,7 @@ class EventDeduplicationService {
   async checkAndMarkProcessed(eventKey, metadata) {
     const now = Math.floor(Date.now() / 1000);
     const ttl = now + (this.ttlHours * 3600);
-    
+
     const params = {
       TableName: this.tableName,
       Item: {
@@ -32,12 +33,12 @@ class EventDeduplicationService {
       },
       ConditionExpression: 'attribute_not_exists(event_key)'
     };
-    
+
     try {
-      await this.docClient.send(new PutCommand(params));
+      await dynamodb.put(params).promise();
       return { isNew: true };
     } catch (error) {
-      if (error.name === 'ConditionalCheckFailedException') {
+      if (error.code === 'ConditionalCheckFailedException') {
         return { isNew: false, reason: 'Already processed by another instance' };
       }
       throw error;
@@ -64,12 +65,12 @@ class HybridDeduplicationService {
       if (!this.useFallback) {
         this.logger.error('DynamoDB error, falling back to memory:', error);
         this.useFallback = true;
-        setTimeout(() => { 
-          this.useFallback = false; 
+        setTimeout(() => {
+          this.useFallback = false;
         }, this.fallbackDuration);
       }
     }
-    
+
     // Memory fallback
     if (this.memoryFallback.has(eventKey)) {
       return { isNew: false, reason: 'In-memory duplicate check' };

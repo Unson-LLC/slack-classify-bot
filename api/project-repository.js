@@ -8,13 +8,14 @@
  * - airtable-integration.js: Being replaced by this class
  */
 
-const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
+const AWS = require('aws-sdk');
+
+const dynamodb = new AWS.DynamoDB.DocumentClient({
+  region: process.env.AWS_REGION || 'us-east-1'
+});
 
 class ProjectRepository {
   constructor() {
-    const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
-    this.docClient = DynamoDBDocumentClient.from(client);
     this.tableName = process.env.PROJECTS_TABLE_NAME || 'slack-classify-bot-projects';
 
     // In-memory cache (per Lambda instance)
@@ -23,12 +24,7 @@ class ProjectRepository {
     this.projectsCacheTTL = 600000; // 10 minutes
   }
 
-  /**
-   * Get all active projects with caching
-   * @returns {Promise<Array>} - List of projects
-   */
   async getAllProjects() {
-    // Check cache first
     const now = Date.now();
     if (this.projectsCache && this.projectsCacheTime && (now - this.projectsCacheTime < this.projectsCacheTTL)) {
       console.log(`Using cached projects (${this.projectsCache.length} projects, age: ${Math.round((now - this.projectsCacheTime) / 1000)}s)`);
@@ -46,13 +42,11 @@ class ProjectRepository {
         }
       };
 
-      const result = await this.docClient.send(new ScanCommand(params));
+      const result = await dynamodb.scan(params).promise();
       const projects = result.Items || [];
 
-      // Sort by name
       projects.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-      // Update cache
       this.projectsCache = projects;
       this.projectsCacheTime = now;
 
@@ -65,14 +59,8 @@ class ProjectRepository {
     }
   }
 
-  /**
-   * Get a single project by ID
-   * @param {string} projectId - Project ID
-   * @returns {Promise<Object|null>} - Project or null if not found
-   */
   async getProjectById(projectId) {
     try {
-      // Check cache first
       if (this.projectsCache) {
         const cached = this.projectsCache.find(p => p.project_id === projectId);
         if (cached) {
@@ -90,7 +78,7 @@ class ProjectRepository {
         }
       };
 
-      const result = await this.docClient.send(new GetCommand(params));
+      const result = await dynamodb.get(params).promise();
       return result.Item || null;
 
     } catch (error) {
@@ -99,14 +87,8 @@ class ProjectRepository {
     }
   }
 
-  /**
-   * Get a single project by name
-   * @param {string} projectName - Project name
-   * @returns {Promise<Object|null>} - Project or null if not found
-   */
   async getProjectByName(projectName) {
     try {
-      // Check cache first
       if (this.projectsCache) {
         const cached = this.projectsCache.find(p => p.name === projectName);
         if (cached) {
@@ -117,7 +99,6 @@ class ProjectRepository {
 
       console.log(`Fetching project by name from DynamoDB: ${projectName}`);
 
-      // Need to scan to find by name (name is not a key)
       const params = {
         TableName: this.tableName,
         FilterExpression: '#name = :name AND (attribute_not_exists(is_active) OR is_active = :true)',
@@ -130,7 +111,7 @@ class ProjectRepository {
         }
       };
 
-      const result = await this.docClient.send(new ScanCommand(params));
+      const result = await dynamodb.scan(params).promise();
       return result.Items && result.Items.length > 0 ? result.Items[0] : null;
 
     } catch (error) {
@@ -139,11 +120,6 @@ class ProjectRepository {
     }
   }
 
-  /**
-   * Get Slack channels for a project
-   * @param {string} projectId - Project ID
-   * @returns {Promise<Array>} - Array of channel objects
-   */
   async getChannelsForProject(projectId) {
     try {
       const project = await this.getProjectById(projectId);
@@ -161,11 +137,6 @@ class ProjectRepository {
     }
   }
 
-  /**
-   * Save or update a project
-   * @param {Object} projectData - Project data
-   * @returns {Promise<Object>} - Saved project
-   */
   async saveProject(projectData) {
     try {
       const now = Math.floor(Date.now() / 1000);
@@ -177,7 +148,6 @@ class ProjectRepository {
         is_active: projectData.is_active !== undefined ? projectData.is_active : true
       };
 
-      // Validate required fields
       if (!project.project_id || !project.name) {
         throw new Error('project_id and name are required');
       }
@@ -187,9 +157,8 @@ class ProjectRepository {
         Item: project
       };
 
-      await this.docClient.send(new PutCommand(params));
+      await dynamodb.put(params).promise();
 
-      // Invalidate cache
       this.projectsCache = null;
       this.projectsCacheTime = null;
 
@@ -202,11 +171,6 @@ class ProjectRepository {
     }
   }
 
-  /**
-   * Delete a project (logical delete)
-   * @param {string} projectId - Project ID
-   * @returns {Promise<boolean>} - Success
-   */
   async deleteProject(projectId) {
     try {
       const params = {
@@ -221,9 +185,8 @@ class ProjectRepository {
         }
       };
 
-      await this.docClient.send(new UpdateCommand(params));
+      await dynamodb.update(params).promise();
 
-      // Invalidate cache
       this.projectsCache = null;
       this.projectsCacheTime = null;
 
@@ -236,9 +199,6 @@ class ProjectRepository {
     }
   }
 
-  /**
-   * Clear cache (for testing)
-   */
   clearCache() {
     this.projectsCache = null;
     this.projectsCacheTime = null;
