@@ -77,17 +77,17 @@ async function processFileUpload(message, client, logger, fileDataStore) {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `⏳ *議事録を処理中です...*\n📄 ファイル名: ${fileName}\n\n_要約とネクストアクションを抽出しています。しばらくお待ちください..._`
+          text: `⏳ *議事録を処理中です...*\n📄 ファイル名: ${fileName}\n\n_要約を抽出しています。しばらくお待ちください..._`
         }
       }]
     });
     
-    // Extract summary and action items from content
+    // Extract summary from content (action items are included in the detailed minutes later)
     let summary = null;
     let summaryError = null;
     
     try {
-      logger.info('Extracting summary and action items...');
+      logger.info('Extracting summary...');
       summary = await summarizeText(content);
       fileData.summary = summary;
       
@@ -242,46 +242,15 @@ function createBlocksWithSummary(projects, fileId, fileData, summary, summaryErr
   
   // Summary section
   if (summary && !summaryError) {
-    // Parse the summary text to extract sections
-    const summaryLines = summary.split('\n').filter(line => line.trim());
-    let meetingSummary = '';
-    let nextActions = [];
-    let currentSection = '';
-    
-    for (const line of summaryLines) {
-      if (line.includes('会議の概要')) {
-        currentSection = 'summary';
-      } else if (line.includes('ネクストアクション')) {
-        currentSection = 'actions';
-      } else if (currentSection === 'summary' && line.trim()) {
-        meetingSummary += line.trim() + ' ';
-      } else if (currentSection === 'actions' && line.startsWith('-')) {
-        nextActions.push(line.trim());
+    // Display summary directly (no longer parsing for sections since summarizeText now returns plain text)
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*📝 会議の概要*\n${summary.trim()}`
       }
-    }
-    
-    // Meeting summary
-    if (meetingSummary) {
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*📝 会議の概要*\n${meetingSummary.trim()}`
-        }
-      });
-    }
-    
-    // Next actions
-    if (nextActions.length > 0) {
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*✅ ネクストアクション*\n${nextActions.join('\n')}`
-        }
-      });
-    }
-    
+    });
+
     blocks.push({ type: "divider" });
   } else if (summaryError) {
     blocks.push({
