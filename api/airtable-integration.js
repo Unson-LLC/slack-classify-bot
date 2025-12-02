@@ -2,6 +2,7 @@ const axios = require('axios');
 const Airtable = require('airtable');
 const ProjectRepository = require('./project-repository');
 const GitHubIntegration = require('./github-integration');
+const { resolveNamesToMentions } = require('./slack-name-resolver');
 
 class AirtableIntegration {
   constructor() {
@@ -258,6 +259,9 @@ class AirtableIntegration {
    */
   async postMinutesToChannel(client, channelId, minutes, fileName, summary = null) {
     try {
+      // Convert person names to Slack mentions
+      const minutesWithMentions = await resolveNamesToMentions(minutes);
+
       // First, post the summary as the main message
       const summaryBlocks = [
         {
@@ -316,7 +320,7 @@ class AirtableIntegration {
       // Split long text into chunks to respect Slack's 3000 char limit per block
       const MAX_BLOCK_TEXT_LENGTH = 2900; // Leave some buffer
       const minutesChunks = [];
-      let remainingText = minutes;
+      let remainingText = minutesWithMentions;
 
       while (remainingText.length > 0) {
         if (remainingText.length <= MAX_BLOCK_TEXT_LENGTH) {
