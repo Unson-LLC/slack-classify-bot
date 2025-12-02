@@ -88,11 +88,21 @@ async function resolveNamesToMentions(text) {
   const mapping = await getMembersMapping();
   if (mapping.size === 0) return text;
 
-  let result = text;
+  // Only convert mentions in the action items section
+  const actionSectionMarker = '📅 次の手配・アクション';
+  const markerIndex = text.indexOf(actionSectionMarker);
 
-  // Pattern 1: （name、deadline） - most common format
-  // Matches: （佐藤CTO、今週中）、（渡邊PM、継続）
-  result = result.replace(/（([^（）、]+)、([^）]+)）/g, (match, name, deadline) => {
+  if (markerIndex === -1) {
+    // No action section found, return as-is
+    return text;
+  }
+
+  // Split into before and after action section
+  const beforeAction = text.substring(0, markerIndex);
+  let actionSection = text.substring(markerIndex);
+
+  // Pattern 1: （*name*、deadline） - expected format from prompt
+  actionSection = actionSection.replace(/（\*([^*]+)\*、([^）]+)）/g, (match, name, deadline) => {
     const slackId = findSlackId(mapping, name);
     if (slackId) {
       return `（<@${slackId}>、${deadline}）`;
@@ -100,8 +110,17 @@ async function resolveNamesToMentions(text) {
     return match;
   });
 
-  // Pattern 2: (name、deadline) - half-width parentheses
-  result = result.replace(/\(([^()、]+)、([^)]+)\)/g, (match, name, deadline) => {
+  // Pattern 2: （name、deadline） - fallback without asterisks
+  actionSection = actionSection.replace(/（([^（）、*]+)、([^）]+)）/g, (match, name, deadline) => {
+    const slackId = findSlackId(mapping, name);
+    if (slackId) {
+      return `（<@${slackId}>、${deadline}）`;
+    }
+    return match;
+  });
+
+  // Pattern 3: (name、deadline) - half-width parentheses
+  actionSection = actionSection.replace(/\(([^()、*]+)、([^)]+)\)/g, (match, name, deadline) => {
     const slackId = findSlackId(mapping, name);
     if (slackId) {
       return `(<@${slackId}>、${deadline})`;
@@ -109,25 +128,7 @@ async function resolveNamesToMentions(text) {
     return match;
   });
 
-  // Pattern 3: *name* format (original patterns)
-  const asteriskPatterns = [
-    /（\*([^*]+)\*、/g,
-    /\(\*([^*]+)\*、/g,
-    /担当[:：]\s*\*([^*]+)\*/g,
-    /担当者[:：]\s*\*([^*]+)\*/g,
-  ];
-
-  for (const pattern of asteriskPatterns) {
-    result = result.replace(pattern, (match, name) => {
-      const slackId = findSlackId(mapping, name);
-      if (slackId) {
-        return match.replace(`*${name}*`, `<@${slackId}>`);
-      }
-      return match;
-    });
-  }
-
-  return result;
+  return beforeAction + actionSection;
 }
 
 function clearCache() {
