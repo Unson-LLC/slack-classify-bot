@@ -910,6 +910,17 @@ class AirtableIntegration {
         }
       }
 
+      // Convert person names to Slack mentions in minutes
+      if (detailedMinutes) {
+        try {
+          const { resolveNamesToMentions } = require('./slack-name-resolver');
+          detailedMinutes = await resolveNamesToMentions(detailedMinutes);
+          logger.info('Converted person names to Slack mentions in minutes');
+        } catch (error) {
+          logger.error('Failed to convert names to mentions:', error);
+        }
+      }
+
       logger.info('Committing to GitHub with two-layer structure (minutes + transcript)');
 
       // Commit to GitHub using two-layer structure
