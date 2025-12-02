@@ -44,6 +44,44 @@ async function getMembersMapping() {
   }
 }
 
+// Common role suffixes to strip when matching names
+const ROLE_SUFFIXES = ['CTO', 'CEO', 'CFO', 'COO', 'CMO', 'PM', 'CS', 'PdM', 'EM', 'TL', 'リーダー', 'さん', '氏'];
+
+function stripRoleSuffix(name) {
+  let result = name.trim();
+  for (const suffix of ROLE_SUFFIXES) {
+    if (result.endsWith(suffix)) {
+      result = result.slice(0, -suffix.length).trim();
+      break;
+    }
+  }
+  return result;
+}
+
+function findSlackId(mapping, name) {
+  // Try exact match first
+  let slackId = mapping.get(name);
+  if (slackId) return slackId;
+
+  // Strip role suffix and try again
+  const nameWithoutRole = stripRoleSuffix(name);
+  slackId = mapping.get(nameWithoutRole);
+  if (slackId) return slackId;
+
+  // Try family name only (first part before space)
+  const familyName = name.split(' ')[0];
+  slackId = mapping.get(familyName);
+  if (slackId) return slackId;
+
+  // Try family name from stripped version
+  const familyNameStripped = nameWithoutRole.split(' ')[0];
+  if (familyNameStripped !== familyName) {
+    slackId = mapping.get(familyNameStripped);
+  }
+
+  return slackId;
+}
+
 async function resolveNamesToMentions(text) {
   if (!text) return text;
 
@@ -52,24 +90,36 @@ async function resolveNamesToMentions(text) {
 
   let result = text;
 
-  const patterns = [
+  // Pattern 1: （name、deadline） - most common format
+  // Matches: （佐藤CTO、今週中）、（渡邊PM、継続）
+  result = result.replace(/（([^（）、]+)、([^）]+)）/g, (match, name, deadline) => {
+    const slackId = findSlackId(mapping, name);
+    if (slackId) {
+      return `（<@${slackId}>、${deadline}）`;
+    }
+    return match;
+  });
+
+  // Pattern 2: (name、deadline) - half-width parentheses
+  result = result.replace(/\(([^()、]+)、([^)]+)\)/g, (match, name, deadline) => {
+    const slackId = findSlackId(mapping, name);
+    if (slackId) {
+      return `(<@${slackId}>、${deadline})`;
+    }
+    return match;
+  });
+
+  // Pattern 3: *name* format (original patterns)
+  const asteriskPatterns = [
     /（\*([^*]+)\*、/g,
     /\(\*([^*]+)\*、/g,
-    /（\*([^*]+)\*[,、]/g,
     /担当[:：]\s*\*([^*]+)\*/g,
     /担当者[:：]\s*\*([^*]+)\*/g,
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of asteriskPatterns) {
     result = result.replace(pattern, (match, name) => {
-      const trimmedName = name.trim();
-      let slackId = mapping.get(trimmedName);
-
-      if (!slackId) {
-        const familyName = trimmedName.split(' ')[0];
-        slackId = mapping.get(familyName);
-      }
-
+      const slackId = findSlackId(mapping, name);
       if (slackId) {
         return match.replace(`*${name}*`, `<@${slackId}>`);
       }
