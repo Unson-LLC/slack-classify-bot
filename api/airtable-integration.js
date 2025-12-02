@@ -2,7 +2,6 @@ const axios = require('axios');
 const Airtable = require('airtable');
 const ProjectRepository = require('./project-repository');
 const GitHubIntegration = require('./github-integration');
-const { resolveNamesToMentions } = require('./slack-name-resolver');
 
 class AirtableIntegration {
   constructor() {
@@ -259,8 +258,8 @@ class AirtableIntegration {
    */
   async postMinutesToChannel(client, channelId, minutes, fileName, summary = null) {
     try {
-      // Convert person names to Slack mentions
-      const minutesWithMentions = await resolveNamesToMentions(minutes);
+      // minutes should already have Slack mentions applied by formatMinutesForSlack
+      const minutesWithMentions = minutes;
 
       // First, post the summary as the main message
       const summaryBlocks = [
@@ -899,25 +898,17 @@ class AirtableIntegration {
       const formattedBaseName = aiGeneratedName;
 
       // Generate detailed meeting minutes using AI
+      let minutesData = null;
       let detailedMinutes = null;
       if (fileContent) {
         try {
-          const { generateMeetingMinutes } = require('./llm-integration');
-          detailedMinutes = await generateMeetingMinutes(fileContent, projectName);
-          logger.info('AI generated detailed meeting minutes');
+          const { generateMeetingMinutes, formatMinutesForGitHub } = require('./llm-integration');
+          minutesData = await generateMeetingMinutes(fileContent, projectName);
+          // Format for GitHub (no Slack mentions, human-readable names)
+          detailedMinutes = formatMinutesForGitHub(minutesData);
+          logger.info('AI generated detailed meeting minutes (formatted for GitHub)');
         } catch (error) {
           logger.error('Failed to generate meeting minutes with AI:', error);
-        }
-      }
-
-      // Convert person names to Slack mentions in minutes
-      if (detailedMinutes) {
-        try {
-          const { resolveNamesToMentions } = require('./slack-name-resolver');
-          detailedMinutes = await resolveNamesToMentions(detailedMinutes);
-          logger.info('Converted person names to Slack mentions in minutes');
-        } catch (error) {
-          logger.error('Failed to convert names to mentions:', error);
         }
       }
 

@@ -222,8 +222,8 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
   
   try {
     const airtableIntegration = new AirtableIntegration();
-    const { generateMeetingMinutes } = require('./llm-integration');
-    
+    const { generateMeetingMinutes, formatMinutesForSlack } = require('./llm-integration');
+
     // Parse action data
     const actionData = JSON.parse(action.value);
     const { projectId, channelId, fileId, fileName, summary, projectName } = actionData;
@@ -371,7 +371,9 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
     }
     
     // Generate meeting minutes with brainbase context
-    const meetingMinutes = await generateMeetingMinutes(fileData.content, projectName);
+    const minutesData = await generateMeetingMinutes(fileData.content, projectName);
+    // Format for Slack with mentions
+    const meetingMinutes = await formatMinutesForSlack(minutesData);
 
     if (!meetingMinutes) {
       logger.error('Failed to generate meeting minutes');
@@ -704,7 +706,7 @@ app.action('retry_generate_minutes', async ({ ack, action, body, client, logger 
 
   try {
     const airtableIntegration = new AirtableIntegration();
-    const { generateMeetingMinutes } = require('./llm-integration');
+    const { generateMeetingMinutes, formatMinutesForSlack } = require('./llm-integration');
 
     const actionData = JSON.parse(action.value || '{}');
     const { projectId, channelId, fileId, fileName, summary, projectName, messageTs, sourceChannelId } = actionData;
@@ -759,7 +761,8 @@ app.action('retry_generate_minutes', async ({ ack, action, body, client, logger 
       fileDataStore.set(`${fileId}_${updateChannel}`, fileData);
     }
 
-    const meetingMinutes = await generateMeetingMinutes(fileData.content, projectName);
+    const minutesData = await generateMeetingMinutes(fileData.content, projectName);
+    const meetingMinutes = await formatMinutesForSlack(minutesData);
 
     if (!meetingMinutes) {
       throw new Error('再試行でも議事録生成に失敗しました');

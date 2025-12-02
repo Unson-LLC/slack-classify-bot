@@ -319,7 +319,7 @@ ${projectContext}
 
 ` : '';
 
-  const prompt = `あなたは優秀な議事録作成者です。以下の会議の文字起こしデータから、読み手がすぐに状況を理解し行動できる「レポート形式」の議事録を作成してください。
+  const prompt = `あなたは優秀な議事録作成者です。以下の会議の文字起こしデータから、読み手がすぐに状況を理解し行動できる議事録を作成してください。
 ${contextSection}
 # 最重要ルール：情報密度を維持する
 - *会議が長ければ議事録も長くなる*：30分の会議と2時間の会議で同じ長さの議事録にしてはいけない
@@ -327,15 +327,32 @@ ${contextSection}
 - *各トピックに十分な文脈を記述する*：1トピックにつき最低3〜5文の説明を含める
 - 会議に参加していない人が読んでも「何が起きたか」「なぜそうなったか」が完全に理解できるレベルの詳細さを目指す
 
-# 出力形式（Slack mrkdwn記法）
+# 出力形式：JSON
 
-## 1. タイトル行
+以下のJSON形式で出力してください。JSONのみを出力し、前後に説明文を付けないでください。
+
+\`\`\`json
+{
+  "minutes": "議事録本文（Slack mrkdwn記法）",
+  "actions": [
+    {
+      "task": "具体的なアクション内容",
+      "assignee": "担当者のフルネーム",
+      "deadline": "期限"
+    }
+  ]
+}
+\`\`\`
+
+## minutesフィールドの内容（Slack mrkdwn記法）
+
+### 1. タイトル行
 \`MM-DD 会議名: トピック1・トピック2・トピック3\`
 
-## 2. 導入文（1〜2文）
+### 2. 導入文（1〜2文）
 会議の目的と主要な成果を端的に説明
 
-## 3. トピック別セクション（メイン部分）
+### 3. トピック別セクション（メイン部分）
 会議で議論された*すべてのトピック*について、以下の構造で詳細に記述：
 
 *[トピック名]について*
@@ -346,31 +363,28 @@ _[サブトピック1]_
 [結論・決定]：何が決まったか、または決まらなかったか
 [理由・根拠]：なぜその結論に至ったか、どのような判断基準が使われたか
 
-_[サブトピック2]_
-（同様に詳細に記述）
-
 ※*各サブトピックは必ず複数の文で説明する*（1行の箇条書きで終わらせない）
 ※議論の経緯、代替案、却下された理由なども含める
 ※具体的な数字、日付、人名、システム名は漏らさず記載
 
-## 4. アクションアイテム（最後）
-*📅 次の手配・アクション*
-- [具体的なアクション]（*担当者のフルネーム*、期限）
-...
-※すべてのアクションアイテムを漏れなく記載
-※担当者名は必ず「苗字 名前」のフルネーム形式で記載（例：佐藤 圭吾、山本 力弥）
-※役職（CTO、PM等）は付けず、フルネームのみを*アスタリスク*で囲む
+## actionsフィールドの内容
 
-# 詳細さの基準
+アクションアイテムを配列で記載：
+- task: 具体的なアクション内容
+- assignee: 担当者の「苗字 名前」形式のフルネーム（例：佐藤 圭吾、山本 力弥）
+  ※役職（CTO、PM等）は含めない
+- deadline: 期限（例：今週中、12/5、来週まで）
+
+## Slack mrkdwn記法（minutesフィールド内で使用）
+- *太字*: 重要なキーワード、決定事項
+- _斜体_: サブ見出し
+- \`コード\`: 技術用語、システム名
+
+## 詳細さの基準
 - 15分の会議 → 約500〜800文字の議事録
 - 30分の会議 → 約1000〜1500文字の議事録
 - 60分の会議 → 約2000〜3000文字の議事録
 - 90分以上の会議 → 約3000〜5000文字の議事録
-
-# Slack mrkdwn記法
-- *太字*: 重要なキーワード、決定事項、担当者名
-- _斜体_: サブ見出し
-- \`コード\`: 技術用語、システム名
 
 # 文字起こしデータ
 ${truncatedText}
@@ -392,15 +406,146 @@ ${truncatedText}
     const responseBody = await invokeBedrock(payload, modelId);
 
     if (responseBody.content && responseBody.content.length > 0) {
-      return responseBody.content[0].text;
+      const rawResponse = responseBody.content[0].text;
+
+      // Parse JSON response
+      const parsed = parseMinutesJson(rawResponse);
+      if (!parsed) {
+        console.warn('Failed to parse JSON response, returning raw text as fallback');
+        // Return legacy format for backward compatibility
+        return { raw: rawResponse, minutes: rawResponse, actions: [] };
+      }
+
+      // Return structured data for callers to format appropriately
+      return {
+        raw: rawResponse,
+        minutes: parsed.minutes || '',
+        actions: parsed.actions || []
+      };
     } else {
       throw new Error("Bedrockからのレスポンス形式が不正です。");
     }
   } catch (error) {
     console.error("Bedrockでの議事録生成中にエラーが発生しました:", error);
-    // エラーが発生した場合はnullを返すことで、メインの処理フローを止めない
     return null;
   }
 }
 
-module.exports = { summarizeText, generateFilename, generateMeetingMinutes, getProjectContext }; 
+/**
+ * JSONレスポンスをパースする
+ */
+function parseMinutesJson(text) {
+  try {
+    // Try to extract JSON from markdown code block
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[1]);
+    }
+
+    // Try to parse as raw JSON
+    const trimmed = text.trim();
+    if (trimmed.startsWith('{')) {
+      return JSON.parse(trimmed);
+    }
+
+    return null;
+  } catch (error) {
+    console.error('JSON parse error:', error.message);
+    return null;
+  }
+}
+
+/**
+ * GitHub用にフォーマット（メンションなし、人名そのまま）
+ */
+function formatMinutesForGitHub(minutesData) {
+  if (!minutesData) return '';
+  if (typeof minutesData === 'string') return minutesData;
+
+  const { minutes, actions } = minutesData;
+
+  if (!actions || actions.length === 0) {
+    return minutes || '';
+  }
+
+  const actionLines = actions.map(action => {
+    return `- ${action.task}（${action.assignee}、${action.deadline}）`;
+  });
+
+  const actionsSection = `\n\n*📅 次の手配・アクション*\n${actionLines.join('\n')}`;
+
+  return (minutes || '') + actionsSection;
+}
+
+/**
+ * Slack用にフォーマット（メンション付き）
+ */
+async function formatMinutesForSlack(minutesData) {
+  if (!minutesData) return '';
+  if (typeof minutesData === 'string') return minutesData;
+
+  const { minutes, actions } = minutesData;
+
+  if (!actions || actions.length === 0) {
+    return minutes || '';
+  }
+
+  // Import mention resolver
+  const { getMembersMapping } = require('./slack-name-resolver');
+  const mapping = await getMembersMapping();
+
+  const actionLines = actions.map(action => {
+    let assigneeDisplay = action.assignee;
+
+    // Try to convert assignee to Slack mention
+    if (mapping.size > 0 && action.assignee) {
+      const slackId = findAssigneeSlackId(mapping, action.assignee);
+      if (slackId) {
+        assigneeDisplay = `<@${slackId}>`;
+      }
+    }
+
+    return `- ${action.task}（${assigneeDisplay}、${action.deadline}）`;
+  });
+
+  const actionsSection = `\n\n*📅 次の手配・アクション*\n${actionLines.join('\n')}`;
+
+  return (minutes || '') + actionsSection;
+}
+
+/**
+ * 担当者名からSlack IDを検索する
+ */
+function findAssigneeSlackId(mapping, name) {
+  const roleSuffixes = ['CTO', 'CEO', 'CFO', 'COO', 'CMO', 'PM', 'CS', 'PdM', 'EM', 'TL', 'リーダー', 'さん', '氏'];
+
+  // Try exact match
+  let slackId = mapping.get(name);
+  if (slackId) return slackId;
+
+  // Strip role suffix and try again
+  let nameWithoutRole = name.trim();
+  for (const suffix of roleSuffixes) {
+    if (nameWithoutRole.endsWith(suffix)) {
+      nameWithoutRole = nameWithoutRole.slice(0, -suffix.length).trim();
+      break;
+    }
+  }
+  slackId = mapping.get(nameWithoutRole);
+  if (slackId) return slackId;
+
+  // Try family name only
+  const familyName = nameWithoutRole.split(' ')[0];
+  slackId = mapping.get(familyName);
+
+  return slackId;
+}
+
+module.exports = {
+  summarizeText,
+  generateFilename,
+  generateMeetingMinutes,
+  getProjectContext,
+  formatMinutesForGitHub,
+  formatMinutesForSlack
+}; 
