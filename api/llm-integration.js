@@ -541,11 +541,101 @@ function findAssigneeSlackId(mapping, name) {
   return slackId;
 }
 
+/**
+ * Slackメッセージからタスクを抽出する
+ * @param {string} message - Slackメッセージ本文
+ * @param {string} channelName - チャンネル名（プロジェクト推定用）
+ * @param {string} senderName - 送信者名
+ * @returns {Promise<Object|null>} - 抽出されたタスク情報
+ */
+async function extractTaskFromMessage(message, channelName = '', senderName = '') {
+  if (!message || message.trim() === '') {
+    return null;
+  }
+
+  const modelId = resolveModelId();
+
+  const prompt = `あなたはタスク抽出AIです。以下のSlackメッセージからタスク情報を抽出してJSON形式で出力してください。
+
+# メッセージ情報
+- チャンネル: ${channelName || '不明'}
+- 送信者: ${senderName || '不明'}
+- メッセージ: ${message}
+
+# 出力形式
+JSONのみを出力してください。タスクが明確でない場合は null を出力してください。
+
+\`\`\`json
+{
+  "title": "タスクの簡潔なタイトル（30文字以内）",
+  "project_id": "プロジェクトID（チャンネル名から推測、不明ならgeneral）",
+  "priority": "high/medium/low（依頼の緊急度から判断）",
+  "due": "期限（YYYY-MM-DD形式、明示されていればnull）",
+  "context": "タスクの背景・詳細（元のメッセージを要約）",
+  "requester": "依頼者名"
+}
+\`\`\`
+
+# プロジェクトID候補
+- salestailor: SalesTailor関連
+- ncom: ncom/docomo関連
+- tech-knight: Tech Knight関連
+- baao: BAAO関連
+- zeims: Zeims関連
+- general: その他/不明
+
+# 注意
+- メンション（<@XXXXX>）は無視してタスク内容を抽出
+- 「お願い」「やって」「確認して」などの依頼表現からタスクを特定
+- 単なる質問や雑談はタスクではない（nullを返す）
+`;
+
+  const payload = {
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: 1024,
+    messages: [{
+      role: "user",
+      content: [{ type: "text", text: prompt }]
+    }]
+  };
+
+  try {
+    const responseBody = await invokeBedrock(payload, modelId);
+
+    if (responseBody.content && responseBody.content.length > 0) {
+      const rawResponse = responseBody.content[0].text;
+
+      // Parse JSON from response
+      const jsonMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (parsed === null) return null;
+        return parsed;
+      }
+
+      // Try parsing as raw JSON
+      const trimmed = rawResponse.trim();
+      if (trimmed === 'null') return null;
+      if (trimmed.startsWith('{')) {
+        return JSON.parse(trimmed);
+      }
+
+      return null;
+    }
+  } catch (error) {
+    console.error('タスク抽出エラー:', error);
+    return null;
+  }
+
+  return null;
+}
+
 module.exports = {
   summarizeText,
   generateFilename,
   generateMeetingMinutes,
   getProjectContext,
   formatMinutesForGitHub,
-  formatMinutesForSlack
+  formatMinutesForSlack,
+  extractTaskFromMessage
 }; 

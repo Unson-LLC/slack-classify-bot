@@ -1188,6 +1188,137 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
   }
 });
 
+// --- Task Intake from Mentions (Phase 2: AI PM) ---
+// @k.sato へのメンションを検知し、タスクを抽出して _tasks/index.md に追記
+const KEIGO_USER_ID = 'U07LNUP582X';
+
+app.message(async ({ message, client, logger }) => {
+  // k.sato へのメンションを含むメッセージのみ処理
+  if (!message.text || !message.text.includes(`<@${KEIGO_USER_ID}>`)) {
+    return;
+  }
+
+  // ファイル共有イベントは既存ハンドラで処理するのでスキップ
+  if (message.subtype === 'file_share') {
+    return;
+  }
+
+  // ボット自身のメッセージはスキップ
+  if (message.bot_id) {
+    return;
+  }
+
+  logger.info('=== TASK INTAKE HANDLER (k.sato mention) ===');
+  logger.info('Message:', JSON.stringify(message, null, 2));
+
+  try {
+    const { extractTaskFromMessage } = require('./llm-integration');
+    const GitHubIntegration = require('./github-integration');
+
+    // チャンネル名を取得
+    let channelName = message.channel;
+    try {
+      const channelInfo = await client.conversations.info({ channel: message.channel });
+      channelName = channelInfo.channel.name || message.channel;
+    } catch (e) {
+      logger.warn('Failed to get channel name:', e.message);
+    }
+
+    // 送信者名を取得
+    let senderName = message.user;
+    try {
+      const userInfo = await client.users.info({ user: message.user });
+      senderName = userInfo.user.real_name || userInfo.user.name || message.user;
+    } catch (e) {
+      logger.warn('Failed to get user name:', e.message);
+    }
+
+    // メンションを除去したテキスト
+    const cleanedText = message.text
+      .replace(/<@[A-Z0-9]+>/g, '')
+      .trim();
+
+    if (!cleanedText || cleanedText.length < 5) {
+      logger.info('Message too short after removing mentions, skipping');
+      return;
+    }
+
+    // 処理中メッセージを投稿
+    const processingMsg = await client.chat.postMessage({
+      channel: message.channel,
+      thread_ts: message.ts,
+      text: '📝 タスクを解析中...'
+    });
+
+    // LLMでタスク抽出
+    const task = await extractTaskFromMessage(cleanedText, channelName, senderName);
+
+    if (!task) {
+      logger.info('No task extracted from message');
+      await client.chat.update({
+        channel: message.channel,
+        ts: processingMsg.ts,
+        text: '💭 タスクとして認識できませんでした。依頼内容を具体的に記載してください。'
+      });
+      return;
+    }
+
+    logger.info('Extracted task:', JSON.stringify(task, null, 2));
+
+    // Slackメッセージへのリンクを生成
+    const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
+    const slackLink = `https://${workspaceId}.slack.com/archives/${message.channel}/p${message.ts.replace('.', '')}`;
+
+    // GitHub APIでタスクを追記
+    const github = new GitHubIntegration();
+    const result = await github.appendTask(task, slackLink);
+
+    if (result.success) {
+      logger.info('Task appended successfully:', result);
+
+      // 成功メッセージ
+      const dueText = task.due ? `📅 期限: ${task.due}` : '';
+      const priorityEmoji = task.priority === 'high' ? '🔴' : task.priority === 'low' ? '🟢' : '🟡';
+
+      await client.chat.update({
+        channel: message.channel,
+        ts: processingMsg.ts,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `✅ *タスクを登録しました*\n\n*タイトル:* ${task.title}\n*プロジェクト:* ${task.project_id || 'general'}\n${priorityEmoji} *優先度:* ${task.priority || 'medium'}\n${dueText}`
+            }
+          },
+          {
+            type: "context",
+            elements: [
+              {
+                type: "mrkdwn",
+                text: `📋 <${result.commitUrl}|_tasks/index.md に追記> | ID: \`${result.taskId}\``
+              }
+            ]
+          }
+        ],
+        text: `✅ タスク「${task.title}」を登録しました`
+      });
+    } else {
+      throw new Error('Failed to append task to GitHub');
+    }
+
+  } catch (error) {
+    logger.error('Error processing task intake:', error);
+
+    // エラーメッセージ
+    await client.chat.postMessage({
+      channel: message.channel,
+      thread_ts: message.ts,
+      text: `❌ タスク登録に失敗しました: ${error.message}`
+    });
+  }
+});
+
 // Catch-all action handler for debugging (excluding already handled actions)
 app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');

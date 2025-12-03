@@ -174,6 +174,98 @@ ${minutes || '詳細議事録なし'}
   async commitSingleFile({ owner, repo, branch, path, content, message }) {
     return this.createOrUpdateFile({ owner, repo, branch, path, content, message });
   }
+
+  /**
+   * ファイルの現在の内容を取得
+   */
+  async getFileContent({ owner, repo, branch, path }) {
+    const headers = {
+      'Authorization': `Bearer ${this.token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,
+        { headers }
+      );
+      return {
+        content: Buffer.from(response.data.content, 'base64').toString('utf-8'),
+        sha: response.data.sha
+      };
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return { content: '', sha: null };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * タスクを_tasks/index.mdに追加
+   * @param {Object} task - タスク情報
+   * @param {string} task.title - タスクタイトル
+   * @param {string} task.project_id - プロジェクトID
+   * @param {string} task.priority - 優先度(high/medium/low)
+   * @param {string|null} task.due - 期限(YYYY-MM-DD)
+   * @param {string} task.context - コンテキスト/背景
+   * @param {string} task.requester - 依頼者
+   * @param {string} slackLink - Slackメッセージへのリンク
+   * @returns {Promise<Object>} - コミット結果
+   */
+  async appendTask(task, slackLink = '') {
+    const owner = 'sintariran';
+    const repo = 'brainbase';
+    const branch = 'main';
+    const path = '_tasks/index.md';
+
+    // 現在のファイル内容を取得
+    const { content: currentContent, sha } = await this.getFileContent({ owner, repo, branch, path });
+
+    // タスクIDを生成
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const taskId = `SLACK-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
+
+    // タスクをYAML形式でフォーマット
+    const taskEntry = `---
+id: ${taskId}
+title: ${task.title}
+project_id: ${task.project_id || 'general'}
+status: todo
+owner: keigo
+priority: ${task.priority || 'medium'}
+due: ${task.due || 'null'}
+tags: [slack, auto-import]
+links: []
+---
+
+- ${dateStr} Slackから自動取り込み: ${task.requester}から依頼
+${task.context ? `- 背景: ${task.context}` : ''}
+${slackLink ? `- Slack: ${slackLink}` : ''}
+
+`;
+
+    // ファイルの先頭に追加（新しいタスクが上に来る）
+    const newContent = taskEntry + currentContent;
+
+    // コミット
+    const result = await this.createOrUpdateFile({
+      owner,
+      repo,
+      branch,
+      path,
+      content: newContent,
+      message: `feat: タスク追加 - ${task.title}`
+    });
+
+    return {
+      success: true,
+      taskId,
+      ...result
+    };
+  }
 }
 
 module.exports = GitHubIntegration;
