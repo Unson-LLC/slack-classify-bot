@@ -229,8 +229,8 @@ ${minutes || '詳細議事録なし'}
     const taskId = `SLACK-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
 
     // 担当者を決定（assigneeがあれば使用、なければkeigo）
-    const owner = task.assignee || 'keigo';
-    const ownerFormatted = owner.replace(' ', '-').toLowerCase();
+    const taskOwner = task.assignee || 'keigo';
+    const ownerFormatted = taskOwner.replace(' ', '-').toLowerCase();
 
     // タスクをYAML形式でフォーマット
     const taskEntry = `---
@@ -246,7 +246,7 @@ links: []
 ---
 
 - ${dateStr} Slackから自動取り込み: ${task.requester}から依頼
-- 担当: ${owner}
+- 担当: ${taskOwner}
 ${task.context ? `- 背景: ${task.context}` : ''}
 ${slackLink ? `- Slack: ${slackLink}` : ''}
 
@@ -270,6 +270,162 @@ ${slackLink ? `- Slack: ${slackLink}` : ''}
       taskId,
       ...result
     };
+  }
+
+  /**
+   * @k.satoへのメンションを_inbox/pending.mdに追記
+   * Claude Codeが起動時に確認できるようにする
+   * @param {Object} mention - メンション情報
+   * @param {string} mention.channelName - チャンネル名
+   * @param {string} mention.senderName - 送信者名
+   * @param {string} mention.text - メッセージテキスト
+   * @param {string} mention.timestamp - タイムスタンプ
+   * @param {string} mention.slackLink - Slackへのリンク
+   * @returns {Promise<Object>} - コミット結果
+   */
+  async appendToInbox(mention) {
+    const owner = 'sintariran';
+    const repo = 'brainbase';
+    const branch = 'main';
+    const path = '_inbox/pending.md';
+
+    // 現在のファイル内容を取得（存在しない場合は空）
+    const { content: currentContent, sha } = await this.getFileContent({ owner, repo, branch, path });
+
+    // 日付と時刻をフォーマット
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
+
+    // メンションIDを生成
+    const mentionId = `INBOX-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
+
+    // メンションエントリをフォーマット
+    const mentionEntry = `---
+id: ${mentionId}
+channel: ${mention.channelName}
+sender: ${mention.senderName}
+timestamp: ${mention.timestamp}
+status: pending
+---
+
+### ${timeStr} | #${mention.channelName} | ${mention.senderName}
+
+${mention.text}
+
+[Slack](${mention.slackLink})
+
+`;
+
+    // ファイルの先頭に追加（新しいメンションが上に来る）
+    let newContent;
+    if (!currentContent || currentContent.trim() === '') {
+      // ファイルが空の場合はヘッダーを追加
+      newContent = `# Pending Inbox Items
+
+<!-- AI PMが自動更新。Claude Code起動時に確認・対応を提案 -->
+
+${mentionEntry}`;
+    } else {
+      // 既存のヘッダーの後に追加
+      const headerEnd = currentContent.indexOf('\n\n---');
+      if (headerEnd > 0) {
+        // ヘッダーがある場合はその後に挿入
+        const header = currentContent.substring(0, headerEnd + 2);
+        const rest = currentContent.substring(headerEnd + 2);
+        newContent = header + mentionEntry + rest;
+      } else {
+        // ヘッダーがない場合は先頭に追加
+        newContent = mentionEntry + currentContent;
+      }
+    }
+
+    // コミット
+    const result = await this.createOrUpdateFile({
+      owner,
+      repo,
+      branch,
+      path,
+      content: newContent,
+      message: `inbox: @k.sato mention from #${mention.channelName}`
+    });
+
+    return {
+      success: true,
+      mentionId,
+      ...result
+    };
+  }
+
+  /**
+   * _inbox/pending.mdから処理済みアイテムをアーカイブ
+   * @param {string} mentionId - アーカイブするメンションID
+   * @returns {Promise<Object>} - コミット結果
+   */
+  async archiveInboxItem(mentionId) {
+    const owner = 'sintariran';
+    const repo = 'brainbase';
+    const branch = 'main';
+    const pendingPath = '_inbox/pending.md';
+    const archivePath = '_inbox/archive.md';
+
+    // pending.mdの内容を取得
+    const { content: pendingContent } = await this.getFileContent({ owner, repo, branch, path: pendingPath });
+
+    if (!pendingContent) {
+      return { success: false, error: 'Pending file not found' };
+    }
+
+    // メンションIDに該当するブロックを抽出
+    const blocks = pendingContent.split(/^---$/m);
+    let archivedBlock = null;
+    const remainingBlocks = [];
+
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      if (block.includes(`id: ${mentionId}`)) {
+        archivedBlock = '---' + block + '---';
+        // 次のブロック（本文）も含める
+        if (blocks[i + 1]) {
+          archivedBlock += blocks[i + 1];
+          i++; // 次のブロックをスキップ
+        }
+      } else {
+        remainingBlocks.push(block);
+      }
+    }
+
+    if (!archivedBlock) {
+      return { success: false, error: 'Mention ID not found' };
+    }
+
+    // archive.mdに追加
+    const { content: archiveContent } = await this.getFileContent({ owner, repo, branch, path: archivePath });
+    const newArchiveContent = (archiveContent || '# Archived Inbox Items\n\n') + archivedBlock + '\n';
+
+    // pending.mdを更新
+    const newPendingContent = remainingBlocks.join('---');
+
+    // 両方のファイルを更新（順番に）
+    await this.createOrUpdateFile({
+      owner,
+      repo,
+      branch,
+      path: archivePath,
+      content: newArchiveContent,
+      message: `inbox: archive ${mentionId}`
+    });
+
+    await this.createOrUpdateFile({
+      owner,
+      repo,
+      branch,
+      path: pendingPath,
+      content: newPendingContent,
+      message: `inbox: remove archived ${mentionId}`
+    });
+
+    return { success: true, mentionId };
   }
 }
 

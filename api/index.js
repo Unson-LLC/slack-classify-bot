@@ -79,6 +79,7 @@ console.log('- AIRTABLE_BASE:', process.env.AIRTABLE_BASE ? 'Loaded' : 'Missing'
 console.log('- AIRTABLE_TOKEN:', process.env.AIRTABLE_TOKEN ? 'Loaded' : 'Missing');
 console.log('- SLACK_BOT_ID:', process.env.SLACK_BOT_ID ? process.env.SLACK_BOT_ID : 'Missing');
 console.log('- SLACK_ARCHIVE_ENABLED:', ARCHIVE_ENABLED ? 'Enabled' : 'Disabled');
+console.log('- INBOX_TARGET_USER_ID:', process.env.INBOX_TARGET_USER_ID || 'U07LNUP582X (default k.sato)');
 console.log('--------------------------');
 
 // --- Event Handlers ---
@@ -1223,8 +1224,29 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
 // --- Task Intake from Mentions (Phase 2: AI PM) ---
 // @slack-classify-bot + @member へのメンションでタスクを抽出して _tasks/index.md に追記
 // 全メンバー対応: S3の members.json から動的に取得
-const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || 'U07M53WFD3V';
+// Bot User IDは起動時にSlack APIから取得
+let BOT_USER_ID = process.env.SLACK_BOT_USER_ID || null;
 const { getAllMemberSlackIds, getSlackIdToBrainbaseName } = require('./slack-name-resolver');
+
+// Bot User IDの遅延解決用関数
+const { WebClient } = require('@slack/web-api');
+const initClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+async function getBotUserId() {
+  if (BOT_USER_ID) {
+    return BOT_USER_ID;
+  }
+  try {
+    const authResult = await initClient.auth.test();
+    BOT_USER_ID = authResult.user_id;
+    console.log(`Bot User ID resolved: ${BOT_USER_ID}`);
+    return BOT_USER_ID;
+  } catch (e) {
+    console.warn('Failed to resolve Bot User ID, using fallback U08T9TC88BB:', e.message);
+    BOT_USER_ID = 'U08T9TC88BB';
+    return BOT_USER_ID;
+  }
+}
 
 // メンバーリストのキャッシュ
 let memberSlackIdsCache = null;
@@ -1240,13 +1262,13 @@ async function getMemberSlackIds() {
   return memberSlackIdsCache;
 }
 
-function extractMentionedMemberIds(text, memberIds) {
+function extractMentionedMemberIds(text, memberIds, botUserId) {
   const mentionedIds = [];
   const mentionRegex = /<@([A-Z0-9]+)>/g;
   let match;
   while ((match = mentionRegex.exec(text)) !== null) {
     const userId = match[1];
-    if (memberIds.has(userId) && userId !== BOT_USER_ID) {
+    if (memberIds.has(userId) && userId !== botUserId) {
       mentionedIds.push(userId);
     }
   }
@@ -1254,8 +1276,21 @@ function extractMentionedMemberIds(text, memberIds) {
 }
 
 app.message(async ({ message, client, logger }) => {
+  // Bot User IDを遅延解決（コールドスタート時の非同期初期化問題を回避）
+  const botUserId = await getBotUserId();
+
+  // デバッグ: 全メンションを検出してログ出力
+  const allMentions = message.text ? message.text.match(/<@[A-Z0-9]+>/g) : [];
+  if (allMentions && allMentions.length > 0) {
+    logger.info(`=== DEBUG: Message with mentions ===`);
+    logger.info(`Message text: ${message.text}`);
+    logger.info(`All mentions found: ${allMentions.join(', ')}`);
+    logger.info(`Current BOT_USER_ID: ${botUserId}`);
+    logger.info(`Message sender: ${message.user}`);
+  }
+
   // Botへのメンションが必要
-  const hasBotMention = message.text && message.text.includes(`<@${BOT_USER_ID}>`);
+  const hasBotMention = message.text && message.text.includes(`<@${botUserId}>`);
 
   if (!hasBotMention) {
     return;
@@ -1273,17 +1308,36 @@ app.message(async ({ message, client, logger }) => {
 
   // メンバーリストを取得
   const memberIds = await getMemberSlackIds();
+  logger.info(`Member IDs count: ${memberIds.size}`);
 
-  // Bot以外のメンバーへのメンションを抽出
-  const mentionedMemberIds = extractMentionedMemberIds(message.text, memberIds);
+  // Bot以外のメンバーへのメンションを抽出（自分自身も許可）
+  const mentionedMemberIds = extractMentionedMemberIds(message.text, memberIds, botUserId);
+  logger.info(`Mentioned member IDs: ${mentionedMemberIds.join(', ') || 'none'}`);
 
   if (mentionedMemberIds.length === 0) {
+    logger.info('No valid member mentions found, skipping task intake');
     return;
   }
 
   logger.info('=== TASK INTAKE HANDLER (@bot + @member) ===');
   logger.info('Mentioned members:', mentionedMemberIds);
-  logger.info('Message:', JSON.stringify(message, null, 2));
+
+  // 重複除外: メッセージのtsをキーにチェック
+  const taskEventKey = `task_intake_${message.channel}_${message.ts}`;
+  try {
+    const { isNew, reason } = await deduplicationService.checkAndMarkProcessed(taskEventKey, {
+      type: 'task_intake',
+      channel: message.channel,
+      user: message.user,
+      ts: message.ts
+    });
+    if (!isNew) {
+      logger.info(`Duplicate task intake event detected (key: ${taskEventKey}), reason: ${reason}`);
+      return;
+    }
+  } catch (dedupError) {
+    logger.warn('Deduplication check failed, proceeding anyway:', dedupError.message);
+  }
 
   try {
     const { extractTaskFromMessage } = require('./llm-integration');
@@ -1316,9 +1370,39 @@ app.message(async ({ message, client, logger }) => {
       .replace(/<@[A-Z0-9]+>/g, '')
       .trim();
 
-    if (!cleanedText || cleanedText.length < 5) {
+    if (!cleanedText || cleanedText.length < 2) {
       logger.info('Message too short after removing mentions, skipping');
       return;
+    }
+
+    // スレッドコンテキストを取得
+    let threadContext = '';
+    const threadTs = message.thread_ts;
+    if (threadTs) {
+      try {
+        const threadResult = await client.conversations.replies({
+          channel: message.channel,
+          ts: threadTs,
+          limit: 10
+        });
+        if (threadResult.messages && threadResult.messages.length > 1) {
+          const contextMessages = [];
+          for (const msg of threadResult.messages) {
+            if (msg.ts === message.ts) continue;
+            const msgUser = slackIdToName.get(msg.user) || msg.user;
+            const msgText = msg.text?.replace(/<@[A-Z0-9]+>/g, '').trim() || '';
+            if (msgText) {
+              contextMessages.push(`${msgUser}: ${msgText}`);
+            }
+          }
+          if (contextMessages.length > 0) {
+            threadContext = `\n\n【スレッドの文脈】\n${contextMessages.join('\n')}`;
+            logger.info(`Thread context added: ${contextMessages.length} messages`);
+          }
+        }
+      } catch (e) {
+        logger.warn('Failed to get thread context:', e.message);
+      }
     }
 
     // 処理中メッセージを投稿
@@ -1328,8 +1412,9 @@ app.message(async ({ message, client, logger }) => {
       text: '📝 タスクを解析中...'
     });
 
-    // LLMでタスク抽出（担当者情報を追加）
-    const task = await extractTaskFromMessage(cleanedText, channelName, senderName);
+    // LLMでタスク抽出（スレッドコンテキスト付き）
+    const messageWithContext = cleanedText + threadContext;
+    const task = await extractTaskFromMessage(messageWithContext, channelName, senderName);
 
     if (!task) {
       logger.info('No task extracted from message');
@@ -1358,32 +1443,35 @@ app.message(async ({ message, client, logger }) => {
     if (result.success) {
       logger.info('Task appended successfully:', result);
 
-      // 成功メッセージ
-      const dueText = task.due ? `📅 期限: ${task.due}` : '';
-      const priorityEmoji = task.priority === 'high' ? '🔴' : task.priority === 'low' ? '🟢' : '🟡';
-      const assigneeText = task.assignee ? `👤 担当: ${task.assignee}` : '';
+      // サポット風UIでメッセージを生成
+      const { createTaskMessageBlocks } = require('./task-ui');
+      const taskBlocks = createTaskMessageBlocks({
+        taskId: result.taskId,
+        title: task.title,
+        requester: senderName,
+        requesterSlackId: message.user,
+        assignee: task.assignee,
+        assigneeSlackId: task.assignee_slack_id,
+        priority: task.priority || 'medium',
+        due: task.due,
+        slackLink
+      });
+
+      // コミットリンクを追加
+      taskBlocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `📋 <${result.commitUrl}|_tasks/index.md に追記> | ID: \`${result.taskId}\``
+          }
+        ]
+      });
 
       await client.chat.update({
         channel: message.channel,
         ts: processingMsg.ts,
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `✅ *タスクを登録しました*\n\n*タイトル:* ${task.title}\n*プロジェクト:* ${task.project_id || 'general'}\n${assigneeText}\n${priorityEmoji} *優先度:* ${task.priority || 'medium'}\n${dueText}`
-            }
-          },
-          {
-            type: "context",
-            elements: [
-              {
-                type: "mrkdwn",
-                text: `📋 <${result.commitUrl}|_tasks/index.md に追記> | ID: \`${result.taskId}\``
-              }
-            ]
-          }
-        ],
+        blocks: taskBlocks,
         text: `✅ タスク「${task.title}」を登録しました`
       });
     } else {
@@ -1402,35 +1490,229 @@ app.message(async ({ message, client, logger }) => {
   }
 });
 
+// --- _inbox Notification Handler (Phase 2.5) ---
+// @k.satoへのメンションをbrainbase/_inbox/pending.mdに追記
+// Claude Codeが起動時に確認・対応を提案できるようにする
+const INBOX_TARGET_USER_ID = process.env.INBOX_TARGET_USER_ID || 'U07LNUP582X'; // k.sato's Slack ID
+
+app.message(async ({ message, client, logger }) => {
+  // @k.satoへのメンションをチェック
+  const hasTargetMention = message.text && message.text.includes(`<@${INBOX_TARGET_USER_ID}>`);
+
+  if (!hasTargetMention) {
+    return;
+  }
+
+  // Botメッセージはスキップ
+  if (message.bot_id) {
+    return;
+  }
+
+  // 自分自身の投稿はスキップ
+  if (message.user === INBOX_TARGET_USER_ID) {
+    return;
+  }
+
+  logger.info('=== _INBOX NOTIFICATION HANDLER (@k.sato) ===');
+
+  // 重複除外: メッセージのtsをキーにチェック
+  const inboxEventKey = `inbox_${message.channel}_${message.ts}`;
+  try {
+    const { isNew, reason } = await deduplicationService.checkAndMarkProcessed(inboxEventKey, {
+      type: 'inbox_notification',
+      channel: message.channel,
+      user: message.user,
+      ts: message.ts
+    });
+    if (!isNew) {
+      logger.info(`Duplicate inbox event detected (key: ${inboxEventKey}), reason: ${reason}`);
+      return;
+    }
+  } catch (dedupError) {
+    logger.warn('Inbox deduplication check failed, proceeding anyway:', dedupError.message);
+  }
+
+  try {
+    const GitHubIntegration = require('./github-integration');
+
+    // チャンネル名を取得
+    let channelName = message.channel;
+    try {
+      const channelInfo = await client.conversations.info({ channel: message.channel });
+      channelName = channelInfo.channel?.name || message.channel;
+    } catch (e) {
+      logger.warn('Failed to get channel name:', e.message);
+    }
+
+    // 送信者名を取得
+    let senderName = message.user;
+    try {
+      const userInfo = await client.users.info({ user: message.user });
+      senderName = userInfo.user?.real_name || userInfo.user?.name || message.user;
+    } catch (e) {
+      logger.warn('Failed to get user name:', e.message);
+    }
+
+    // ユーザー名キャッシュ（スレッド内で使用）
+    const userNameCache = new Map();
+    userNameCache.set(message.user, senderName);
+
+    async function getUserName(userId) {
+      if (userNameCache.has(userId)) {
+        return userNameCache.get(userId);
+      }
+      try {
+        const userInfo = await client.users.info({ user: userId });
+        const name = userInfo.user?.real_name || userInfo.user?.name || userId;
+        userNameCache.set(userId, name);
+        return name;
+      } catch (e) {
+        userNameCache.set(userId, userId);
+        return userId;
+      }
+    }
+
+    // Slackメッセージへのリンクを生成
+    const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
+    const slackLink = `https://${workspaceId}.slack.com/archives/${message.channel}/p${message.ts.replace('.', '')}`;
+
+    // スレッドの文脈を取得
+    let contextText = '';
+    const threadTs = message.thread_ts;
+
+    if (threadTs) {
+      // スレッド内のメッセージの場合、スレッド全体を取得
+      try {
+        const threadResult = await client.conversations.replies({
+          channel: message.channel,
+          ts: threadTs,
+          limit: 20 // 直近20件まで
+        });
+
+        if (threadResult.messages && threadResult.messages.length > 1) {
+          const threadMessages = [];
+          for (const msg of threadResult.messages) {
+            if (msg.ts === message.ts) continue; // 自分のメッセージはスキップ
+            const msgUserName = await getUserName(msg.user);
+            const msgTime = new Date(parseFloat(msg.ts) * 1000).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
+            threadMessages.push(`> **${msgUserName}** (${msgTime}): ${msg.text}`);
+          }
+          if (threadMessages.length > 0) {
+            contextText = `\n\n**スレッドの文脈:**\n${threadMessages.join('\n')}\n`;
+          }
+        }
+      } catch (e) {
+        logger.warn('Failed to get thread context:', e.message);
+      }
+    }
+
+    // メンションを含むテキスト（スレッド文脈付き）
+    const messageText = message.text + contextText;
+
+    // GitHub APIで_inbox/pending.mdに追記
+    const github = new GitHubIntegration();
+    const result = await github.appendToInbox({
+      channelName,
+      senderName,
+      text: messageText,
+      timestamp: message.ts,
+      slackLink
+    });
+
+    if (result.success) {
+      logger.info('Inbox notification added:', result);
+
+      // リアクションを付けて処理完了を示す（目立たないが追跡可能）
+      try {
+        await client.reactions.add({
+          channel: message.channel,
+          name: 'inbox_tray',
+          timestamp: message.ts
+        });
+      } catch (e) {
+        // リアクションの追加に失敗しても問題なし（すでに付いている場合など）
+        logger.debug('Could not add reaction:', e.message);
+      }
+    }
+  } catch (error) {
+    logger.error('Error processing inbox notification:', error);
+  }
+});
+
 // --- Task Reminder Actions (Phase 3) ---
 
-// Task Complete Action
+// Task Complete Action (サポット風)
 app.action(/^task_complete_/, async ({ ack, action, body, client, logger }) => {
   await ack();
   logger.info('=== TASK COMPLETE ACTION ===');
 
   try {
+    const { createCompletedTaskBlocks } = require('./task-ui');
     const actionData = JSON.parse(action.value);
-    const { taskId } = actionData;
+    const { taskId, title, requesterSlackId, assigneeSlackId } = actionData;
+
+    const completedAt = new Date().toISOString();
+    const blocks = createCompletedTaskBlocks({
+      taskId,
+      title,
+      requesterSlackId,
+      assigneeSlackId,
+      completedAt
+    });
 
     await client.chat.update({
       channel: body.channel.id,
       ts: body.message.ts,
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `✅ *タスク完了*\n\nタスク \`${taskId}\` を完了としてマークしました。\n_tasks/index.md で status を done に更新してください。_`
-          }
-        }
-      ],
-      text: `✅ タスク ${taskId} を完了としてマーク`
+      blocks: blocks,
+      text: `✅ ${title}`
+    });
+
+    await client.chat.postMessage({
+      channel: body.channel.id,
+      thread_ts: body.message.ts,
+      text: `<@${body.user.id}> さんが完了`
     });
 
     logger.info(`Task ${taskId} marked as complete by ${body.user.id}`);
   } catch (error) {
     logger.error('Error handling task complete:', error);
+  }
+});
+
+// Task Uncomplete Action (サポット風)
+app.action(/^task_uncomplete_/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== TASK UNCOMPLETE ACTION ===');
+
+  try {
+    const { createTaskMessageBlocks } = require('./task-ui');
+    const actionData = JSON.parse(action.value);
+    const { taskId, title, requesterSlackId, assigneeSlackId } = actionData;
+
+    const blocks = createTaskMessageBlocks({
+      taskId,
+      title,
+      requesterSlackId,
+      assigneeSlackId,
+      due: null
+    });
+
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: blocks,
+      text: `🎯 ${title}`
+    });
+
+    await client.chat.postMessage({
+      channel: body.channel.id,
+      thread_ts: body.message.ts,
+      text: `<@${body.user.id}> さんが未完了に戻しました`
+    });
+
+    logger.info(`Task ${taskId} marked as uncomplete by ${body.user.id}`);
+  } catch (error) {
+    logger.error('Error handling task uncomplete:', error);
   }
 });
 
@@ -1468,8 +1750,181 @@ app.action(/^task_snooze_/, async ({ ack, action, body, client, logger }) => {
   }
 });
 
+// Task Due Date Selection (サポット風)
+app.action(/^task_set_due_/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== TASK SET DUE ACTION ===');
+  logger.info('Selected value:', action.selected_option?.value);
+
+  try {
+    const taskId = action.action_id.replace('task_set_due_', '');
+    const selectedValue = action.selected_option?.value;
+
+    let dueDate;
+    const today = new Date();
+
+    switch (selectedValue) {
+      case 'today':
+        dueDate = today.toISOString().split('T')[0];
+        break;
+      case 'tomorrow':
+        today.setDate(today.getDate() + 1);
+        dueDate = today.toISOString().split('T')[0];
+        break;
+      case 'next_week':
+        today.setDate(today.getDate() + 7);
+        dueDate = today.toISOString().split('T')[0];
+        break;
+      case 'custom':
+        await client.views.open({
+          trigger_id: body.trigger_id,
+          view: {
+            type: 'modal',
+            callback_id: `task_set_custom_due_${taskId}`,
+            title: { type: 'plain_text', text: '期限を設定' },
+            submit: { type: 'plain_text', text: '設定' },
+            blocks: [
+              {
+                type: 'input',
+                block_id: 'due_date_block',
+                element: {
+                  type: 'datepicker',
+                  action_id: 'due_date_input',
+                  placeholder: { type: 'plain_text', text: '日付を選択' }
+                },
+                label: { type: 'plain_text', text: '期限日' }
+              }
+            ],
+            private_metadata: JSON.stringify({ taskId, channelId: body.channel.id, messageTs: body.message.ts })
+          }
+        });
+        return;
+      default:
+        dueDate = null;
+    }
+
+    if (dueDate) {
+      const currentBlocks = body.message.blocks;
+      const updatedBlocks = currentBlocks.map(block => {
+        if (block.type === 'section' && block.text?.text?.includes('期限')) {
+          return {
+            ...block,
+            text: { type: 'mrkdwn', text: `期限: ${dueDate} ✅` }
+          };
+        }
+        return block;
+      });
+
+      await client.chat.update({
+        channel: body.channel.id,
+        ts: body.message.ts,
+        blocks: updatedBlocks,
+        text: `期限を ${dueDate} に設定しました`
+      });
+
+      logger.info(`Task ${taskId} due date set to ${dueDate}`);
+    }
+  } catch (error) {
+    logger.error('Error setting due date:', error);
+  }
+});
+
+// Task Edit Button (サポット風)
+app.action(/^task_edit_/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== TASK EDIT ACTION ===');
+
+  try {
+    const { createEditModalBlocks } = require('./task-ui');
+    const actionData = JSON.parse(action.value);
+    const { taskId, title, requesterSlackId, assigneeSlackId, due } = actionData;
+
+    const blocks = createEditModalBlocks({ title, requesterSlackId, assigneeSlackId, due });
+
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: {
+        type: 'modal',
+        callback_id: `task_edit_submit_${taskId}`,
+        title: { type: 'plain_text', text: 'タスクを編集する' },
+        submit: { type: 'plain_text', text: 'OK！' },
+        close: { type: 'plain_text', text: 'やめとく' },
+        blocks: blocks,
+        private_metadata: JSON.stringify({ taskId, channelId: body.channel.id, messageTs: body.message.ts })
+      }
+    });
+
+    logger.info(`Edit modal opened for task ${taskId}`);
+  } catch (error) {
+    logger.error('Error opening edit modal:', error);
+  }
+});
+
+// Task Edit Modal Submit Handler (サポット風)
+app.view(/^task_edit_submit_/, async ({ ack, view, body, client, logger }) => {
+  await ack();
+  logger.info('=== TASK EDIT SUBMIT ===');
+
+  try {
+    const { createTaskMessageBlocks, formatDueDate } = require('./task-ui');
+    const metadata = JSON.parse(view.private_metadata);
+    const { taskId, channelId, messageTs } = metadata;
+
+    const values = view.state.values;
+
+    const newTitle = values.title_block?.title_input?.value || '';
+    const newRequesterSlackId = values.requester_block?.requester_input?.selected_user || null;
+    const newAssigneeSlackId = values.assignee_block?.assignee_input?.selected_user || null;
+
+    let newDue = null;
+    const dueDate = values.due_block?.due_date_input?.selected_date;
+    const dueTime = values.due_block?.due_time_input?.selected_option?.value;
+    if (dueDate) {
+      if (dueTime) {
+        const [hours, minutes] = dueTime.split(':');
+        newDue = new Date(`${dueDate}T${hours}:${minutes}:00+09:00`);
+      } else {
+        newDue = new Date(`${dueDate}T18:00:00+09:00`);
+      }
+    }
+
+    let startDate = null;
+    const startDateVal = values.start_block?.start_date_input?.selected_date;
+    const startTimeVal = values.start_block?.start_time_input?.selected_option?.value;
+    if (startDateVal) {
+      if (startTimeVal) {
+        const [hours, minutes] = startTimeVal.split(':');
+        startDate = new Date(`${startDateVal}T${hours}:${minutes}:00+09:00`);
+      } else {
+        startDate = new Date(`${startDateVal}T09:00:00+09:00`);
+      }
+    }
+
+    logger.info(`Edit submit - title: ${newTitle}, requester: ${newRequesterSlackId}, assignee: ${newAssigneeSlackId}, due: ${newDue}`);
+
+    const blocks = createTaskMessageBlocks({
+      taskId,
+      title: newTitle,
+      requesterSlackId: newRequesterSlackId,
+      assigneeSlackId: newAssigneeSlackId,
+      due: newDue ? newDue.toISOString() : null
+    });
+
+    await client.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      blocks: blocks,
+      text: `タスク更新: ${newTitle}`
+    });
+
+    logger.info(`Task ${taskId} updated successfully`);
+  } catch (error) {
+    logger.error('Error submitting task edit:', error);
+  }
+});
+
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_snooze_).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);
