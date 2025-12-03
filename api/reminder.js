@@ -118,7 +118,8 @@ class ReminderService {
     try {
       const result = await this.slackClient.chat.postMessage({
         channel: slackId,
-        ...message
+        text: `<@${slackId}> ${message.text}`,
+        blocks: message.blocks
       });
 
       console.log(`Sent ${type} reminder to ${slackId} for task ${task.id}`);
