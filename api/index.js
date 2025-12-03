@@ -1402,8 +1402,74 @@ app.message(async ({ message, client, logger }) => {
   }
 });
 
+// --- Task Reminder Actions (Phase 3) ---
+
+// Task Complete Action
+app.action(/^task_complete_/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== TASK COMPLETE ACTION ===');
+
+  try {
+    const actionData = JSON.parse(action.value);
+    const { taskId } = actionData;
+
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `✅ *タスク完了*\n\nタスク \`${taskId}\` を完了としてマークしました。\n_tasks/index.md で status を done に更新してください。_`
+          }
+        }
+      ],
+      text: `✅ タスク ${taskId} を完了としてマーク`
+    });
+
+    logger.info(`Task ${taskId} marked as complete by ${body.user.id}`);
+  } catch (error) {
+    logger.error('Error handling task complete:', error);
+  }
+});
+
+// Task Snooze Action
+app.action(/^task_snooze_/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== TASK SNOOZE ACTION ===');
+
+  try {
+    const actionData = JSON.parse(action.value);
+    const { taskId } = actionData;
+
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+    await client.chat.update({
+      channel: body.channel.id,
+      ts: body.message.ts,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `⏰ *リマインダー設定*\n\nタスク \`${taskId}\` のリマインダーを ${tomorrowStr} に設定しました。`
+          }
+        }
+      ],
+      text: `⏰ タスク ${taskId} のリマインダーを明日に設定`
+    });
+
+    logger.info(`Task ${taskId} snoozed to ${tomorrowStr} by ${body.user.id}`);
+  } catch (error) {
+    logger.error('Error handling task snooze:', error);
+  }
+});
+
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_snooze_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);
@@ -1413,6 +1479,30 @@ app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_pr
 // --- Lambda Handler ---
 // This is the standard handler format for Bolt on AWS Lambda.
 module.exports.handler = async (event, context, callback) => {
+  // Check for scheduled reminder trigger
+  if (event.source === 'aws.events' || event.action === 'run_reminders') {
+    const { WebClient } = require('@slack/web-api');
+    const ReminderService = require('./reminder');
+
+    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+    const reminderService = new ReminderService(slackClient);
+
+    try {
+      const results = await reminderService.runDailyReminders();
+      console.log('Daily reminders completed:', JSON.stringify(results, null, 2));
+      return {
+        statusCode: 200,
+        body: JSON.stringify(results)
+      };
+    } catch (error) {
+      console.error('Failed to run reminders:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
+  }
+
   const handler = await awsLambdaReceiver.start();
   return handler(event, context, callback);
 };
