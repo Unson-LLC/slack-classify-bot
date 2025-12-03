@@ -1189,12 +1189,16 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
 });
 
 // --- Task Intake from Mentions (Phase 2: AI PM) ---
-// @k.sato へのメンションを検知し、タスクを抽出して _tasks/index.md に追記
+// @slack-classify-bot + @k.sato へのメンションでタスクを抽出して _tasks/index.md に追記
 const KEIGO_USER_ID = 'U07LNUP582X';
+const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || 'U07M53WFD3V';
 
 app.message(async ({ message, client, logger }) => {
-  // k.sato へのメンションを含むメッセージのみ処理
-  if (!message.text || !message.text.includes(`<@${KEIGO_USER_ID}>`)) {
+  // Botへのメンション + k.satoへのメンション両方が必要
+  const hasBotMention = message.text && message.text.includes(`<@${BOT_USER_ID}>`);
+  const hasKeigoMention = message.text && message.text.includes(`<@${KEIGO_USER_ID}>`);
+
+  if (!hasBotMention || !hasKeigoMention) {
     return;
   }
 
@@ -1208,7 +1212,7 @@ app.message(async ({ message, client, logger }) => {
     return;
   }
 
-  logger.info('=== TASK INTAKE HANDLER (k.sato mention) ===');
+  logger.info('=== TASK INTAKE HANDLER (@bot + @k.sato) ===');
   logger.info('Message:', JSON.stringify(message, null, 2));
 
   try {
