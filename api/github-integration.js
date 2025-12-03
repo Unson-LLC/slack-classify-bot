@@ -228,13 +228,17 @@ ${minutes || '詳細議事録なし'}
     const dateStr = now.toISOString().split('T')[0];
     const taskId = `SLACK-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
 
+    // 担当者を決定（assigneeがあれば使用、なければkeigo）
+    const owner = task.assignee || 'keigo';
+    const ownerFormatted = owner.replace(' ', '-').toLowerCase();
+
     // タスクをYAML形式でフォーマット
     const taskEntry = `---
 id: ${taskId}
 title: ${task.title}
 project_id: ${task.project_id || 'general'}
 status: todo
-owner: keigo
+owner: ${ownerFormatted}
 priority: ${task.priority || 'medium'}
 due: ${task.due || 'null'}
 tags: [slack, auto-import]
@@ -242,6 +246,7 @@ links: []
 ---
 
 - ${dateStr} Slackから自動取り込み: ${task.requester}から依頼
+- 担当: ${owner}
 ${task.context ? `- 背景: ${task.context}` : ''}
 ${slackLink ? `- Slack: ${slackLink}` : ''}
 

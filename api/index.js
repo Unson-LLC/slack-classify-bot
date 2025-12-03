@@ -6,6 +6,11 @@ const path = require('path');
 const { processFileUpload } = require('./processFileUpload');
 const AirtableIntegration = require('./airtable-integration');
 const { HybridDeduplicationService } = require('./dynamodb-deduplication');
+const SlackArchive = require('./slack-archive');
+
+// Initialize Slack archive for message backup (Phase 2.5)
+const slackArchive = new SlackArchive();
+const ARCHIVE_ENABLED = process.env.SLACK_ARCHIVE_ENABLED !== 'false';
 
 // In-memory store for file data
 const fileDataStore = new Map();
@@ -73,9 +78,36 @@ console.log('- N8N_AIRTABLE_ENDPOINT:', process.env.N8N_AIRTABLE_ENDPOINT ? 'Loa
 console.log('- AIRTABLE_BASE:', process.env.AIRTABLE_BASE ? 'Loaded' : 'Missing');
 console.log('- AIRTABLE_TOKEN:', process.env.AIRTABLE_TOKEN ? 'Loaded' : 'Missing');
 console.log('- SLACK_BOT_ID:', process.env.SLACK_BOT_ID ? process.env.SLACK_BOT_ID : 'Missing');
+console.log('- SLACK_ARCHIVE_ENABLED:', ARCHIVE_ENABLED ? 'Enabled' : 'Disabled');
 console.log('--------------------------');
 
 // --- Event Handlers ---
+
+// Message Archive Handler (Phase 2.5: ソースデータ蓄積)
+// 全メッセージをS3にアーカイブ
+app.message(async ({ message, client, logger }) => {
+  if (!ARCHIVE_ENABLED) return;
+  if (message.bot_id) return;
+
+  try {
+    let channelName = message.channel;
+    let userName = message.user;
+
+    try {
+      const channelInfo = await client.conversations.info({ channel: message.channel });
+      channelName = channelInfo.channel?.name || message.channel;
+    } catch (e) { /* ignore */ }
+
+    try {
+      const userInfo = await client.users.info({ user: message.user });
+      userName = userInfo.user?.real_name || userInfo.user?.name || message.user;
+    } catch (e) { /* ignore */ }
+
+    await slackArchive.archiveMessage(message, channelName, userName);
+  } catch (error) {
+    logger.warn('Failed to archive message:', error.message);
+  }
+});
 
 // File Upload Event
 app.message(async ({ message, client, logger, event }) => {
@@ -1189,16 +1221,43 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
 });
 
 // --- Task Intake from Mentions (Phase 2: AI PM) ---
-// @slack-classify-bot + @k.sato へのメンションでタスクを抽出して _tasks/index.md に追記
-const KEIGO_USER_ID = 'U07LNUP582X';
+// @slack-classify-bot + @member へのメンションでタスクを抽出して _tasks/index.md に追記
+// 全メンバー対応: S3の members.json から動的に取得
 const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || 'U07M53WFD3V';
+const { getAllMemberSlackIds, getSlackIdToBrainbaseName } = require('./slack-name-resolver');
+
+// メンバーリストのキャッシュ
+let memberSlackIdsCache = null;
+let memberSlackIdsCacheTime = null;
+const MEMBER_CACHE_TTL = 5 * 60 * 1000; // 5分
+
+async function getMemberSlackIds() {
+  if (memberSlackIdsCache && memberSlackIdsCacheTime && (Date.now() - memberSlackIdsCacheTime < MEMBER_CACHE_TTL)) {
+    return memberSlackIdsCache;
+  }
+  memberSlackIdsCache = await getAllMemberSlackIds();
+  memberSlackIdsCacheTime = Date.now();
+  return memberSlackIdsCache;
+}
+
+function extractMentionedMemberIds(text, memberIds) {
+  const mentionedIds = [];
+  const mentionRegex = /<@([A-Z0-9]+)>/g;
+  let match;
+  while ((match = mentionRegex.exec(text)) !== null) {
+    const userId = match[1];
+    if (memberIds.has(userId) && userId !== BOT_USER_ID) {
+      mentionedIds.push(userId);
+    }
+  }
+  return mentionedIds;
+}
 
 app.message(async ({ message, client, logger }) => {
-  // Botへのメンション + k.satoへのメンション両方が必要
+  // Botへのメンションが必要
   const hasBotMention = message.text && message.text.includes(`<@${BOT_USER_ID}>`);
-  const hasKeigoMention = message.text && message.text.includes(`<@${KEIGO_USER_ID}>`);
 
-  if (!hasBotMention || !hasKeigoMention) {
+  if (!hasBotMention) {
     return;
   }
 
@@ -1212,7 +1271,18 @@ app.message(async ({ message, client, logger }) => {
     return;
   }
 
-  logger.info('=== TASK INTAKE HANDLER (@bot + @k.sato) ===');
+  // メンバーリストを取得
+  const memberIds = await getMemberSlackIds();
+
+  // Bot以外のメンバーへのメンションを抽出
+  const mentionedMemberIds = extractMentionedMemberIds(message.text, memberIds);
+
+  if (mentionedMemberIds.length === 0) {
+    return;
+  }
+
+  logger.info('=== TASK INTAKE HANDLER (@bot + @member) ===');
+  logger.info('Mentioned members:', mentionedMemberIds);
   logger.info('Message:', JSON.stringify(message, null, 2));
 
   try {
@@ -1237,6 +1307,10 @@ app.message(async ({ message, client, logger }) => {
       logger.warn('Failed to get user name:', e.message);
     }
 
+    // 担当者名を取得（最初のメンションされたメンバー）
+    const slackIdToName = await getSlackIdToBrainbaseName();
+    const assigneeName = slackIdToName.get(mentionedMemberIds[0]) || 'unknown';
+
     // メンションを除去したテキスト
     const cleanedText = message.text
       .replace(/<@[A-Z0-9]+>/g, '')
@@ -1254,7 +1328,7 @@ app.message(async ({ message, client, logger }) => {
       text: '📝 タスクを解析中...'
     });
 
-    // LLMでタスク抽出
+    // LLMでタスク抽出（担当者情報を追加）
     const task = await extractTaskFromMessage(cleanedText, channelName, senderName);
 
     if (!task) {
@@ -1266,6 +1340,10 @@ app.message(async ({ message, client, logger }) => {
       });
       return;
     }
+
+    // 担当者を設定
+    task.assignee = assigneeName;
+    task.assignee_slack_id = mentionedMemberIds[0];
 
     logger.info('Extracted task:', JSON.stringify(task, null, 2));
 
@@ -1283,6 +1361,7 @@ app.message(async ({ message, client, logger }) => {
       // 成功メッセージ
       const dueText = task.due ? `📅 期限: ${task.due}` : '';
       const priorityEmoji = task.priority === 'high' ? '🔴' : task.priority === 'low' ? '🟢' : '🟡';
+      const assigneeText = task.assignee ? `👤 担当: ${task.assignee}` : '';
 
       await client.chat.update({
         channel: message.channel,
@@ -1292,7 +1371,7 @@ app.message(async ({ message, client, logger }) => {
             type: "section",
             text: {
               type: "mrkdwn",
-              text: `✅ *タスクを登録しました*\n\n*タイトル:* ${task.title}\n*プロジェクト:* ${task.project_id || 'general'}\n${priorityEmoji} *優先度:* ${task.priority || 'medium'}\n${dueText}`
+              text: `✅ *タスクを登録しました*\n\n*タイトル:* ${task.title}\n*プロジェクト:* ${task.project_id || 'general'}\n${assigneeText}\n${priorityEmoji} *優先度:* ${task.priority || 'medium'}\n${dueText}`
             }
           },
           {

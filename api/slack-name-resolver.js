@@ -136,4 +136,60 @@ function clearCache() {
   cacheTimestamp = null;
 }
 
-module.exports = { getMembersMapping, resolveNamesToMentions, clearCache };
+async function getAllMemberSlackIds() {
+  const s3Client = new S3Client({ region: BEDROCK_REGION });
+
+  try {
+    const command = new GetObjectCommand({
+      Bucket: BRAINBASE_CONTEXT_BUCKET,
+      Key: 'members.json'
+    });
+
+    const response = await s3Client.send(command);
+    const jsonStr = await response.Body.transformToString();
+    const data = JSON.parse(jsonStr);
+
+    const slackIds = new Set();
+    for (const member of data.members) {
+      if (member.slack_id) {
+        slackIds.add(member.slack_id);
+      }
+    }
+
+    console.log(`Loaded ${slackIds.size} member Slack IDs from S3`);
+    return slackIds;
+  } catch (error) {
+    console.warn('Failed to load member Slack IDs:', error.message);
+    return new Set();
+  }
+}
+
+async function getSlackIdToBrainbaseName() {
+  const s3Client = new S3Client({ region: BEDROCK_REGION });
+
+  try {
+    const command = new GetObjectCommand({
+      Bucket: BRAINBASE_CONTEXT_BUCKET,
+      Key: 'members.json'
+    });
+
+    const response = await s3Client.send(command);
+    const jsonStr = await response.Body.transformToString();
+    const data = JSON.parse(jsonStr);
+
+    const mapping = new Map();
+    for (const member of data.members) {
+      if (member.slack_id && member.brainbase_name) {
+        mapping.set(member.slack_id, member.brainbase_name);
+      }
+    }
+
+    console.log(`Loaded ${mapping.size} Slack ID to brainbase name mappings`);
+    return mapping;
+  } catch (error) {
+    console.warn('Failed to load Slack ID mappings:', error.message);
+    return new Map();
+  }
+}
+
+module.exports = { getMembersMapping, resolveNamesToMentions, clearCache, getAllMemberSlackIds, getSlackIdToBrainbaseName };
