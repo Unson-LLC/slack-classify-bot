@@ -1,0 +1,76 @@
+display_information:
+  name: mana
+  description: AI PM Agent - タスク管理、会議議事録処理、プロジェクトオーケストレーション
+  background_color: "#1a1a2e"
+
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: mana
+    always_online: true
+  shortcuts:
+    - name: 議事録を処理
+      type: message
+      callback_id: process_minutes
+      description: 選択したメッセージを議事録として処理します
+    - name: お礼メッセージを作成
+      type: message
+      callback_id: create_followup
+      description: 会議後のお礼メッセージを生成します
+  slash_commands:
+    - command: /classify
+      url: https://akdofkjrawesv25ynbgco3yodq0oojfm.lambda-url.us-east-1.on.aws/
+      description: メッセージを分類
+      usage_hint: "[メッセージテキスト]"
+      should_escape: false
+    - command: /process-file
+      url: https://akdofkjrawesv25ynbgco3yodq0oojfm.lambda-url.us-east-1.on.aws/
+      description: ファイルを処理
+      usage_hint: "[ファイルID]"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      # メッセージ送信
+      - chat:write
+      - chat:write.public
+      # ファイル操作
+      - files:read
+      # チャンネル情報
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+      - im:read
+      - im:history
+      - mpim:read
+      - mpim:history
+      # ユーザー情報
+      - users:read
+      # コマンド
+      - commands
+      # リアクション
+      - reactions:read
+      # メンション
+      - app_mentions:read
+
+settings:
+  event_subscriptions:
+    request_url: https://akdofkjrawesv25ynbgco3yodq0oojfm.lambda-url.us-east-1.on.aws/
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+      - file_shared
+      - app_mention
+  interactivity:
+    is_enabled: true
+    request_url: https://akdofkjrawesv25ynbgco3yodq0oojfm.lambda-url.us-east-1.on.aws/
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

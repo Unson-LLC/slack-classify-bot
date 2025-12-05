@@ -80,7 +80,74 @@ async function syncChannel(slack, workspaceId, channel, memberCache, daysToSync)
   const oldestTs = (Date.now() / 1000) - (daysToSync * 24 * 60 * 60);
   let cursor = undefined;
   let totalMessages = 0;
+  let totalThreadReplies = 0;
   const messagesByDate = new Map();
+
+  // Helper to add a message to the map
+  const addMessage = async (msg, isThreadReply = false) => {
+    const dateStr = getDateStr(msg.ts);
+    if (!messagesByDate.has(dateStr)) {
+      messagesByDate.set(dateStr, []);
+    }
+
+    const userName = msg.user ? await getMemberName(slack, msg.user, memberCache) : 'unknown';
+
+    messagesByDate.get(dateStr).push({
+      ts: msg.ts,
+      user: msg.user,
+      user_name: userName,
+      text: msg.text || '',
+      channel: channel.id,
+      channel_name: channel.name,
+      thread_ts: msg.thread_ts || null,
+      reply_count: msg.reply_count || 0,
+      is_thread_reply: isThreadReply,
+      reactions: msg.reactions || [],
+      files: (msg.files || []).map(f => ({
+        id: f.id,
+        name: f.name,
+        mimetype: f.mimetype
+      })),
+      subtype: msg.subtype || null,
+      archived_at: new Date().toISOString()
+    });
+  };
+
+  // Fetch thread replies for a parent message
+  const fetchThreadReplies = async (parentTs) => {
+    let threadCursor = undefined;
+    const replies = [];
+
+    do {
+      try {
+        const response = await slack.conversations.replies({
+          channel: channel.id,
+          ts: parentTs,
+          limit: 200,
+          cursor: threadCursor
+        });
+
+        // Skip first message (it's the parent) and add replies
+        for (const reply of (response.messages || []).slice(1)) {
+          replies.push(reply);
+        }
+
+        threadCursor = response.response_metadata?.next_cursor;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } catch (error) {
+        if (error.data?.error === 'ratelimited') {
+          const retryAfter = parseInt(error.data?.headers?.['retry-after'] || '60', 10);
+          console.log(`    Thread rate limited, waiting ${retryAfter}s...`);
+          await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+          continue;
+        }
+        console.error(`    Error fetching thread ${parentTs}:`, error.message);
+        break;
+      }
+    } while (threadCursor);
+
+    return replies;
+  };
 
   do {
     try {
@@ -96,32 +163,18 @@ async function syncChannel(slack, workspaceId, channel, memberCache, daysToSync)
           continue;
         }
 
-        const dateStr = getDateStr(msg.ts);
-        if (!messagesByDate.has(dateStr)) {
-          messagesByDate.set(dateStr, []);
-        }
-
-        const userName = msg.user ? await getMemberName(slack, msg.user, memberCache) : 'unknown';
-
-        messagesByDate.get(dateStr).push({
-          ts: msg.ts,
-          user: msg.user,
-          user_name: userName,
-          text: msg.text || '',
-          channel: channel.id,
-          channel_name: channel.name,
-          thread_ts: msg.thread_ts || null,
-          reactions: msg.reactions || [],
-          files: (msg.files || []).map(f => ({
-            id: f.id,
-            name: f.name,
-            mimetype: f.mimetype
-          })),
-          subtype: msg.subtype || null,
-          archived_at: new Date().toISOString()
-        });
-
+        // Add the parent message
+        await addMessage(msg, false);
         totalMessages++;
+
+        // Fetch thread replies if this message has any
+        if (msg.reply_count && msg.reply_count > 0) {
+          const replies = await fetchThreadReplies(msg.ts);
+          for (const reply of replies) {
+            await addMessage(reply, true);
+            totalThreadReplies++;
+          }
+        }
       }
 
       cursor = response.response_metadata?.next_cursor;
@@ -138,6 +191,10 @@ async function syncChannel(slack, workspaceId, channel, memberCache, daysToSync)
       break;
     }
   } while (cursor);
+
+  if (totalThreadReplies > 0) {
+    console.log(`    Found ${totalMessages} messages + ${totalThreadReplies} thread replies`);
+  }
 
   let savedCount = 0;
   for (const [dateStr, messages] of messagesByDate) {
@@ -158,10 +215,10 @@ async function syncChannel(slack, workspaceId, channel, memberCache, daysToSync)
   }
 
   if (savedCount > 0) {
-    console.log(`    +${savedCount} new messages`);
+    console.log(`    +${savedCount} new messages (including thread replies)`);
   }
 
-  return totalMessages;
+  return totalMessages + totalThreadReplies;
 }
 
 async function saveChannelsList(workspaceId, channels) {
