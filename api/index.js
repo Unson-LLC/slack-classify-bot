@@ -1,4 +1,5 @@
 const { App, AwsLambdaReceiver } = require('@slack/bolt');
+const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const fs = require('fs');
 const path = require('path');
 
@@ -7,6 +8,10 @@ const { processFileUpload } = require('./processFileUpload');
 const AirtableIntegration = require('./airtable-integration');
 const { HybridDeduplicationService } = require('./dynamodb-deduplication');
 const SlackArchive = require('./slack-archive');
+const { generateFollowupMessage, formatMinutesForSlack } = require('./llm-integration');
+
+// Lambda client for async self-invocation
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 // Initialize Slack archive for message backup (Phase 2.5)
 const slackArchive = new SlackArchive();
@@ -18,6 +23,38 @@ const fileDataStore = new Map();
 // Initialize deduplication service
 const deduplicationService = new HybridDeduplicationService(console);
 console.log('DynamoDB deduplication enabled');
+
+// Build follow-up (thank-you) message draft for copy & paste
+function buildFollowupTemplate({ summary, actions, recipient, sender }) {
+  const today = new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  const toLine = recipient && recipient.trim() !== '' ? `${recipient} 各位` : 'ご担当者様 各位';
+  const fromLine = sender && sender.trim() !== '' ? sender : '（お名前を入れてください）';
+
+  const actionLines = Array.isArray(actions) && actions.length > 0
+    ? actions.map(a => `- ${a.task}（${a.assignee || '担当未設定'}、${a.deadline || '期限未設定'}）`).join('\n')
+    : '- なし（追記してください）';
+
+  return [
+    `件名: 本日の打合せありがとうございました（${today}）`,
+    ``,
+    `${toLine}`,
+    ``,
+    `お世話になっております。${fromLine}です。本日の打合せの振り返りとNext Actionを共有いたします。`,
+    ``,
+    `【本日のサマリ】`,
+    summary ? `- ${summary}` : '- （サマリ未設定。必要に応じて追記してください）',
+    ``,
+    `【決定事項・Next Action】`,
+    actionLines,
+    ``,
+    `【お願い】`,
+    `- 内容に認識違いがあればご指摘ください。`,
+    ``,
+    `以上、引き続きよろしくお願いいたします。`,
+    ``,
+    `${fromLine}`
+  ].join('\n');
+}
 
 // Legacy in-memory deduplication (kept for backward compatibility)
 const processedEvents = new Map();
@@ -53,7 +90,7 @@ try {
 } catch (e) {
   console.log('Could not read version.txt file.');
 }
-console.log(`---slack-classify-bot--- Version: ${version}`);
+console.log(`---mana--- Version: ${version}`);
 console.log(`Lambda instance started at: ${new Date().toISOString()}`);
 console.log(`Event deduplication enabled with ${EVENT_CACHE_TTL / 1000}s TTL`);
 
@@ -528,6 +565,26 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
           type: "divider"
         },
         {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              style: "primary",
+              text: { type: "plain_text", text: "お礼メッセージを作成" },
+              action_id: "open_followup_modal",
+              value: JSON.stringify({
+                summary: summary || fileData.summary || '',
+                actions: minutesData?.actions || [],
+                minutes: minutesData?.minutes || meetingMinutes || '',
+                projectName,
+                channelId: body.channel.id,
+                messageTs: body.message.ts,
+                threadTs: body.message.thread_ts || body.message.ts
+              }).slice(0, 1900) // Slack value length guard
+            }
+          ]
+        },
+        {
           type: "section",
           text: {
             type: "mrkdwn",
@@ -730,6 +787,377 @@ app.action('skip_channel_github_only', async ({ ack, action, body, client, logge
       ],
       text: '処理中にエラーが発生しました'
     });
+  }
+});
+
+// Follow-up (thank-you) message generator
+app.action('open_followup_modal', async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== OPEN FOLLOWUP MODAL ===');
+
+  let payload = {};
+  try {
+    payload = JSON.parse(action.value || '{}');
+  } catch (e) {
+    logger.warn('Failed to parse followup payload:', e.message);
+  }
+
+  // Resolve sender display name from Slack user
+  let senderDisplay = '';
+  try {
+    const userInfo = await client.users.info({ user: body.user.id });
+    senderDisplay = userInfo.user?.real_name || userInfo.user?.name || '';
+  } catch (e) {
+    logger.warn('Failed to resolve sender name:', e.message);
+  }
+
+  const recipientDisplay = payload.recipient || 'ご担当者様';
+
+  // Prefer channel/thread info from action body to avoid truncation
+  const channelId = payload.channelId || body.channel?.id || '';
+  const messageTs = payload.messageTs || body.message?.ts || '';
+  const threadTs = payload.threadTs || body.message?.thread_ts || messageTs;
+
+  // Build private_metadata with critical fields first (channelId, threadTs)
+  // so they survive truncation. Truncate minutes/actions if needed.
+  const metadataObj = {
+    channelId,
+    messageTs,
+    threadTs,
+    projectName: payload.projectName || '',
+    senderDisplay,
+    summary: (payload.summary || '').slice(0, 500),
+    actions: (payload.actions || []).slice(0, 5),
+    minutes: (payload.minutes || '').slice(0, 1500)
+  };
+  const privateMetadata = JSON.stringify(metadataObj);
+  logger.info('Followup modal private_metadata:', { channelId, messageTs, threadTs, length: privateMetadata.length });
+
+  try {
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: {
+        type: "modal",
+        callback_id: "followup_modal_config",
+        title: { type: "plain_text", text: "お礼メッセージ作成" },
+        close: { type: "plain_text", text: "キャンセル" },
+        submit: { type: "plain_text", text: "作成" },
+        private_metadata: privateMetadata,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "宛先・送り手・補足を入力して「作成」を押すと、このスレッドに下書きが投稿されます。"
+            }
+          },
+          {
+            type: "input",
+            block_id: "recipient_block",
+            label: { type: "plain_text", text: "宛先（任意）" },
+            optional: true,
+            element: {
+              type: "plain_text_input",
+              action_id: "recipient_input",
+              initial_value: recipientDisplay,
+              placeholder: { type: "plain_text", text: "例: 田中様 / ○○社 ご担当者様" }
+            }
+          },
+          {
+            type: "input",
+            block_id: "sender_block",
+            label: { type: "plain_text", text: "送り手（任意）" },
+            optional: true,
+            element: {
+              type: "plain_text_input",
+              action_id: "sender_input",
+              initial_value: senderDisplay || '',
+              placeholder: { type: "plain_text", text: "例: 佐藤 圭吾（雲孫合同会社）" }
+            }
+          },
+          {
+            type: "input",
+            block_id: "notes_block",
+            label: { type: "plain_text", text: "伝えたい意図・一言（任意）" },
+            optional: true,
+            element: {
+              type: "plain_text_input",
+              action_id: "notes_input",
+              multiline: true,
+              placeholder: { type: "plain_text", text: "例: 次回デモ日程を第2候補まで提示したい、決裁者同席を依頼したい など" }
+            }
+          }
+        ]
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to open followup modal:', error);
+  }
+});
+
+// Handle follow-up modal submission: close modal immediately, invoke Lambda async for LLM generation
+app.view('followup_modal_config', async ({ ack, body, view, client, logger }) => {
+  // Extract all data BEFORE ack()
+  const state = view.state?.values || {};
+  const recipient = state.recipient_block?.recipient_input?.value || 'ご担当者様';
+  const sender = state.sender_block?.sender_input?.value || '';
+  const notes = state.notes_block?.notes_input?.value || '';
+
+  let metadata = {};
+  try {
+    metadata = JSON.parse(view.private_metadata || '{}');
+  } catch (e) {
+    // ignore
+  }
+
+  // Close modal IMMEDIATELY
+  await ack();
+  logger.info('=== FOLLOWUP CONFIG SUBMIT - Modal closed ===');
+
+  // Invoke Lambda async for LLM generation
+  const asyncPayload = {
+    type: 'followup_async',
+    channelId: metadata.channelId,
+    threadTs: metadata.threadTs || metadata.messageTs,
+    summary: metadata.summary || '',
+    actions: metadata.actions || [],
+    minutes: metadata.minutes || '',
+    projectName: metadata.projectName || '',
+    recipient,
+    sender,
+    userNotes: notes
+  };
+
+  try {
+    const command = new InvokeCommand({
+      FunctionName: process.env.AWS_LAMBDA_FUNCTION_NAME,
+      InvocationType: 'Event', // async - don't wait
+      Payload: JSON.stringify(asyncPayload)
+    });
+    await lambdaClient.send(command);
+    logger.info('Followup async Lambda invoked');
+  } catch (e) {
+    logger.error('Failed to invoke async Lambda:', e.message);
+  }
+});
+
+// Regenerate from result modal
+app.view('followup_modal_result', async ({ ack, body, view, client, logger }) => {
+  logger.info('=== FOLLOWUP RESULT RESUBMIT ===');
+  const state = view.state?.values || {};
+
+  const recipient = state.recipient_block?.recipient_input?.value || 'ご担当者様';
+  const sender = state.sender_block?.sender_input?.value || '';
+  const notes = state.notes_block?.notes_input?.value || '';
+  const subjectInput = state.subject_block?.subject_input?.value || '';
+  const bodyInput = state.body_block?.body_input?.value || '';
+  const postToThread = !!(state.post_block?.post_to_thread_toggle?.selected_options || []).find(opt => opt.value === 'post_to_thread');
+
+  let metadata = {};
+  try {
+    metadata = JSON.parse(view.private_metadata || '{}');
+  } catch (e) {
+    logger.warn('Failed to parse followup private_metadata:', e.message);
+  }
+
+  const generationInput = {
+    summary: metadata.summary || '',
+    actions: metadata.actions || [],
+    minutes: metadata.minutes || '',
+    projectName: metadata.projectName || '',
+    recipient,
+    sender,
+    userNotes: notes,
+    postToThread,
+    channelId: metadata.channelId,
+    messageTs: metadata.messageTs,
+    threadTs: metadata.threadTs
+  };
+
+  await ack({
+    response_action: 'update',
+    view: {
+      type: "modal",
+      callback_id: "followup_modal_loading",
+      title: { type: "plain_text", text: "お礼メッセージ再生成中..." },
+      close: { type: "plain_text", text: "キャンセル" },
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "少々お待ちください。文面を再生成しています..." }
+        }
+      ]
+    }
+  });
+
+  let generated = null;
+  try {
+    generated = await generateFollowupMessage(generationInput);
+  } catch (e) {
+    logger.error('generateFollowupMessage failed, fallback to user edits/template:', e);
+  }
+
+  const subject = generated?.subject || subjectInput || `本日の打合せありがとうございました（${new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })}）`;
+  const bodyText = generated?.body || bodyInput || buildFollowupTemplate({
+    summary: generationInput.summary,
+    actions: generationInput.actions,
+    recipient,
+    sender
+  });
+
+  // Post to Slack thread first (so下書きが確実に残る)
+  if (generationInput.postToThread && generationInput.channelId) {
+    const threadTs = generationInput.threadTs || generationInput.messageTs;
+    const text = `${subject}\n\n${bodyText}`;
+    logger.info('Posting followup draft to thread (resubmit):', {
+      channel: generationInput.channelId,
+      thread_ts: threadTs,
+      textLength: text.length
+    });
+    try {
+      const postResult = await client.chat.postMessage({
+        channel: generationInput.channelId,
+        thread_ts: threadTs,
+        text
+      });
+      logger.info('Followup draft posted successfully (resubmit):', { ok: postResult.ok, ts: postResult.ts });
+    } catch (e) {
+      logger.error('Failed to post followup draft to thread (result resubmit path):', {
+        error: e.data?.error || e.message,
+        channel: generationInput.channelId,
+        thread_ts: threadTs
+      });
+    }
+  } else {
+    logger.warn('Skipping thread post (resubmit):', {
+      postToThread: generationInput.postToThread,
+      channelId: generationInput.channelId,
+      threadTs: generationInput.threadTs
+    });
+  }
+
+  try {
+    await client.views.update({
+      view_id: view.id,
+      view: {
+        type: "modal",
+        callback_id: "followup_modal_result",
+        title: { type: "plain_text", text: "お礼メッセージ（コピー用）" },
+        close: { type: "plain_text", text: "閉じる" },
+        submit: { type: "plain_text", text: "再生成" },
+        private_metadata: JSON.stringify({
+          channelId: generationInput.channelId,
+          messageTs: generationInput.messageTs,
+          threadTs: generationInput.threadTs,
+          projectName: generationInput.projectName,
+          summary: (generationInput.summary || '').slice(0, 500),
+          actions: (generationInput.actions || []).slice(0, 5),
+          minutes: (generationInput.minutes || '').slice(0, 1500)
+        }),
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "生成し直しました。必要に応じて編集してコピーしてください。"
+            }
+          },
+          {
+            type: "input",
+            block_id: "recipient_block",
+            label: { type: "plain_text", text: "宛先（任意）" },
+            optional: true,
+            element: {
+              type: "plain_text_input",
+              action_id: "recipient_input",
+              initial_value: recipient
+            }
+          },
+          {
+            type: "input",
+            block_id: "sender_block",
+            label: { type: "plain_text", text: "送り手（任意）" },
+            optional: true,
+            element: {
+              type: "plain_text_input",
+              action_id: "sender_input",
+              initial_value: sender
+            }
+          },
+          {
+            type: "input",
+            block_id: "notes_block",
+            label: { type: "plain_text", text: "伝えたい意図・一言（任意）" },
+            optional: true,
+            element: {
+              type: "plain_text_input",
+              action_id: "notes_input",
+              multiline: true,
+              initial_value: notes
+            }
+          },
+          {
+            type: "input",
+            block_id: "post_block",
+            label: { type: "plain_text", text: "生成結果をこのスレッドに下書き投稿する" },
+            optional: true,
+            element: {
+              type: "checkboxes",
+              action_id: "post_to_thread_toggle",
+              options: [
+                {
+                  text: { type: "plain_text", text: "はい、投稿する" },
+                  value: "post_to_thread"
+                }
+              ],
+              initial_options: generationInput.postToThread ? [
+                {
+                  text: { type: "plain_text", text: "はい、投稿する" },
+                  value: "post_to_thread"
+                }
+              ] : []
+            }
+          },
+          {
+            type: "input",
+            block_id: "subject_block",
+            label: { type: "plain_text", text: "件名" },
+            element: {
+              type: "plain_text_input",
+              action_id: "subject_input",
+              initial_value: subject
+            }
+          },
+          {
+            type: "input",
+            block_id: "body_block",
+            label: { type: "plain_text", text: "本文" },
+            element: {
+              type: "plain_text_input",
+              action_id: "body_input",
+              multiline: true,
+              initial_value: bodyText
+            }
+          }
+        ]
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to update followup result modal:', error);
+  }
+
+  if (generationInput.postToThread && generationInput.channelId) {
+    const threadTs = generationInput.threadTs || generationInput.messageTs;
+    const text = `${subject}\n\n${bodyText}`;
+    try {
+      await client.chat.postMessage({
+        channel: generationInput.channelId,
+        thread_ts: threadTs,
+        text
+      });
+    } catch (e) {
+      logger.error('Failed to post followup draft to thread:', e);
+    }
   }
 });
 
@@ -1221,8 +1649,190 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
   }
 });
 
+// --- App Mention Handler (Phase 2: AI PM) ---
+// @mana へのメンションに応答してタスク登録
+app.event('app_mention', async ({ event, client, logger }) => {
+  logger.info('=== APP_MENTION EVENT RECEIVED ===');
+  logger.info(`Channel: ${event.channel}`);
+  logger.info(`User: ${event.user}`);
+  logger.info(`Text: ${event.text}`);
+
+  try {
+    const { extractTaskFromMessage } = require('./llm-integration');
+    const GitHubIntegration = require('./github-integration');
+    const { getSlackIdToBrainbaseName } = require('./slack-name-resolver');
+
+    // メンションを抽出
+    const mentionRegex = /<@([A-Z0-9]+)>/g;
+    const mentions = event.text.match(mentionRegex) || [];
+    const botUserId = await getBotUserId();
+
+    // Bot以外のメンションを抽出（担当者候補）
+    const assigneeMentions = mentions
+      .map(m => m.replace(/<@|>/g, ''))
+      .filter(id => id !== botUserId);
+
+    logger.info(`Assignee mentions: ${assigneeMentions.join(', ') || 'none'}`);
+
+    // メンションを除去したテキスト
+    const cleanedText = event.text.replace(/<@[A-Z0-9]+>/g, '').trim();
+
+    if (!cleanedText || cleanedText.length < 3) {
+      await client.chat.postMessage({
+        channel: event.channel,
+        thread_ts: event.ts,
+        text: '💭 タスク内容を入力してください。\n\n例: `@mana @担当者 〇〇の資料を作成する`'
+      });
+      return;
+    }
+
+    // 担当者がいない場合は送信者を担当者にする
+    const assigneeSlackId = assigneeMentions.length > 0 ? assigneeMentions[0] : event.user;
+
+    // 処理中メッセージ
+    const processingMsg = await client.chat.postMessage({
+      channel: event.channel,
+      thread_ts: event.ts,
+      text: '📝 タスクを解析中...'
+    });
+
+    // チャンネル名を取得
+    let channelName = event.channel;
+    try {
+      const channelInfo = await client.conversations.info({ channel: event.channel });
+      channelName = channelInfo.channel?.name || event.channel;
+    } catch (e) {
+      logger.warn('Failed to get channel name:', e.message);
+    }
+
+    // 送信者名を取得
+    let senderName = event.user;
+    try {
+      const userInfo = await client.users.info({ user: event.user });
+      senderName = userInfo.user?.real_name || userInfo.user?.name || event.user;
+    } catch (e) {
+      logger.warn('Failed to get user name:', e.message);
+    }
+
+    // 担当者名を取得
+    const slackIdToName = await getSlackIdToBrainbaseName();
+    const assigneeName = slackIdToName.get(assigneeSlackId) || senderName;
+
+    // LLMでタスク抽出
+    const taskResult = await extractTaskFromMessage(cleanedText, channelName, senderName);
+
+    if (!taskResult) {
+      await client.chat.update({
+        channel: event.channel,
+        ts: processingMsg.ts,
+        text: '💭 タスクとして認識できませんでした。具体的な依頼内容を記載してください。'
+      });
+      return;
+    }
+
+    // 配列でない場合は配列に変換
+    const tasks = Array.isArray(taskResult) ? taskResult : [taskResult];
+    const validTasks = tasks.filter(t => t && t.title);
+
+    if (validTasks.length === 0) {
+      await client.chat.update({
+        channel: event.channel,
+        ts: processingMsg.ts,
+        text: '💭 タスクとして認識できませんでした。具体的な依頼内容を記載してください。'
+      });
+      return;
+    }
+
+    logger.info(`Extracted ${validTasks.length} task(s)`);
+
+    // Slackメッセージへのリンク
+    const workspaceId = 'unson-inc';
+    const slackLink = `https://${workspaceId}.slack.com/archives/${event.channel}/p${event.ts.replace('.', '')}`;
+
+    // GitHub APIで各タスクを追記
+    const github = new GitHubIntegration();
+    const results = [];
+
+    for (const task of validTasks) {
+      // 担当者を設定
+      task.assignee = assigneeName;
+      task.assignee_slack_id = assigneeSlackId;
+      task.requester = senderName;
+
+      logger.info('Appending task:', task.title);
+      const result = await github.appendTask(task, slackLink);
+      if (result.success) {
+        results.push({ task, result });
+        logger.info('Task appended:', result.taskId);
+      }
+    }
+
+    if (results.length === 0) {
+      throw new Error('Failed to append any tasks to GitHub');
+    }
+
+    // 複数タスク用のブロック生成
+    const blocks = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `📋 *タスク整理* (${results.length}件)\n「...」からそれぞれ編集やキャンセルができます`
+        }
+      },
+      { type: "divider" }
+    ];
+
+    for (const { task, result } of results) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*<${result.fileUrl}|【${task.project_id || 'TASK'}】${task.title}>*\n期限: ${task.due || '未設定'}　担当: <@${task.assignee_slack_id}>`
+        },
+        accessory: {
+          type: "overflow",
+          options: [
+            { text: { type: "plain_text", text: "✅ 完了" }, value: `complete_${result.taskId}` },
+            { text: { type: "plain_text", text: "📝 編集" }, value: `edit_${result.taskId}` },
+            { text: { type: "plain_text", text: "❌ キャンセル" }, value: `cancel_${result.taskId}` }
+          ],
+          action_id: `task_action_${result.taskId}`
+        }
+      });
+    }
+
+    // 最後のコミットURLを表示
+    const lastResult = results[results.length - 1].result;
+    blocks.push(
+      { type: "divider" },
+      {
+        type: "context",
+        elements: [{
+          type: "mrkdwn",
+          text: `📋 <${lastResult.commitUrl}|_tasks/index.md に追記完了>`
+        }]
+      }
+    );
+
+    await client.chat.update({
+      channel: event.channel,
+      ts: processingMsg.ts,
+      blocks: blocks,
+      text: `✅ ${results.length}件のタスクを登録しました`
+    });
+  } catch (error) {
+    logger.error('Error processing app_mention:', error);
+    await client.chat.postMessage({
+      channel: event.channel,
+      thread_ts: event.ts,
+      text: `❌ タスク登録に失敗しました: ${error.message}`
+    });
+  }
+});
+
 // --- Task Intake from Mentions (Phase 2: AI PM) ---
-// @slack-classify-bot + @member へのメンションでタスクを抽出して _tasks/index.md に追記
+// @mana + @member へのメンションでタスクを抽出して _tasks/index.md に追記
 // 全メンバー対応: S3の members.json から動的に取得
 // Bot User IDは起動時にSlack APIから取得
 let BOT_USER_ID = process.env.SLACK_BOT_USER_ID || null;
@@ -1491,15 +2101,17 @@ app.message(async ({ message, client, logger }) => {
 });
 
 // --- _inbox Notification Handler (Phase 2.5) ---
-// @k.satoへのメンションをbrainbase/_inbox/pending.mdに追記
+// @k.satoへのメンション、または k.sato 宛のDMをbrainbase/_inbox/pending.mdに追記
 // Claude Codeが起動時に確認・対応を提案できるようにする
 const INBOX_TARGET_USER_ID = process.env.INBOX_TARGET_USER_ID || 'U07LNUP582X'; // k.sato's Slack ID
 
 app.message(async ({ message, client, logger }) => {
-  // @k.satoへのメンションをチェック
+  // DM (channel starts with "D") は宛先が明示されないため常に対象とする
+  const isDirectMessage = typeof message.channel === 'string' && message.channel.startsWith('D');
+  // チャンネル/スレッドでは明示的なメンションのみ対象
   const hasTargetMention = message.text && message.text.includes(`<@${INBOX_TARGET_USER_ID}>`);
 
-  if (!hasTargetMention) {
+  if (!hasTargetMention && !isDirectMessage) {
     return;
   }
 
@@ -1513,7 +2125,7 @@ app.message(async ({ message, client, logger }) => {
     return;
   }
 
-  logger.info('=== _INBOX NOTIFICATION HANDLER (@k.sato) ===');
+  logger.info('=== _INBOX NOTIFICATION HANDLER (@k.sato or DM) ===');
 
   // 重複除外: メッセージのtsをキーにチェック
   const inboxEventKey = `inbox_${message.channel}_${message.ts}`;
@@ -1924,7 +2536,7 @@ app.view(/^task_edit_submit_/, async ({ ack, view, body, client, logger }) => {
 });
 
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_|open_followup_modal).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);
@@ -1955,6 +2567,56 @@ module.exports.handler = async (event, context, callback) => {
         statusCode: 500,
         body: JSON.stringify({ error: error.message })
       };
+    }
+  }
+
+  // Handle async followup generation (invoked from followup_modal_config)
+  if (event.type === 'followup_async') {
+    const { WebClient } = require('@slack/web-api');
+    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+
+    console.log('=== FOLLOWUP ASYNC HANDLER ===');
+    console.log('Payload:', JSON.stringify(event));
+
+    const { channelId, threadTs, summary, actions, minutes, projectName, recipient, sender, userNotes } = event;
+
+    if (!channelId) {
+      console.error('No channelId in async payload');
+      return { statusCode: 400, body: 'Missing channelId' };
+    }
+
+    // Generate with LLM
+    let generated = null;
+    try {
+      generated = await generateFollowupMessage({
+        summary,
+        actions,
+        minutes,
+        projectName,
+        recipient,
+        sender,
+        userNotes
+      });
+    } catch (e) {
+      console.error('LLM generation failed:', e.message);
+    }
+
+    const subject = generated?.subject || `本日の打合せありがとうございました（${new Date().toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })}）`;
+    const bodyText = generated?.body || buildFollowupTemplate({ summary, actions, recipient, sender });
+
+    const text = `📧 *お礼メッセージ下書き*\n\n*件名:* ${subject}\n\n${bodyText}`;
+
+    try {
+      const result = await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text
+      });
+      console.log('Followup posted:', { ok: result.ok, ts: result.ts });
+      return { statusCode: 200, body: 'OK' };
+    } catch (e) {
+      console.error('Failed to post followup:', e.message);
+      return { statusCode: 500, body: e.message };
     }
   }
 
