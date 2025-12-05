@@ -2574,6 +2574,34 @@ module.exports.handler = async (event, context, callback) => {
     }
   }
 
+  // Handle scheduled Slack history sync
+  if (event.action === 'sync_slack_history') {
+    const { syncAllWorkspaces } = require('./sync-slack-history');
+
+    console.log('=== SLACK HISTORY SYNC HANDLER ===');
+    console.log('Event:', JSON.stringify(event));
+
+    const options = {
+      workspaces: event.workspaces || null,
+      daysToSync: event.daysToSync || 7
+    };
+
+    try {
+      const result = await syncAllWorkspaces(options);
+      console.log('Slack history sync completed:', JSON.stringify(result, null, 2));
+      return {
+        statusCode: 200,
+        body: JSON.stringify(result)
+      };
+    } catch (error) {
+      console.error('Failed to sync Slack history:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
+  }
+
   // Handle async followup generation (invoked from followup_modal_config)
   if (event.type === 'followup_async') {
     const { WebClient } = require('@slack/web-api');
