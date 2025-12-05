@@ -1004,10 +1004,27 @@ class AirtableIntegration {
         type: "divider"
       });
 
-      // Add re-commit button
-      confirmationBlocks.push({
-        type: "actions",
-        elements: [{
+      // Get thread timestamp from file data store or body (needed for buttons)
+      let threadTs = null;
+      const storedFileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${channelId}`);
+      if (storedFileData && storedFileData.threadTs) {
+        threadTs = storedFileData.threadTs;
+        logger.info(`Using thread timestamp from fileDataStore: ${threadTs}`);
+      } else if (body.message && body.message.thread_ts) {
+        threadTs = body.message.thread_ts;
+        logger.info(`Using thread timestamp from body.message: ${threadTs}`);
+      } else if (body.message && body.message.ts) {
+        threadTs = body.message.ts;
+        logger.info(`Using message timestamp as thread: ${threadTs}`);
+      }
+
+      if (!threadTs) {
+        logger.warn('No thread timestamp found, message will be posted to channel');
+      }
+
+      // Build action buttons
+      const actionButtons = [
+        {
           type: "button",
           text: {
             type: "plain_text",
@@ -1026,26 +1043,37 @@ class AirtableIntegration {
           }),
           action_id: "reselect_project_for_recommit",
           style: "primary"
-        }]
-      });
+        }
+      ];
 
-      // Get thread timestamp from file data store or body
-      let threadTs = null;
-      const storedFileData = fileDataStore.get(fileId) || fileDataStore.get(`${fileId}_${channelId}`);
-      if (storedFileData && storedFileData.threadTs) {
-        threadTs = storedFileData.threadTs;
-        logger.info(`Using thread timestamp from fileDataStore: ${threadTs}`);
-      } else if (body.message && body.message.thread_ts) {
-        threadTs = body.message.thread_ts;
-        logger.info(`Using thread timestamp from body.message: ${threadTs}`);
-      } else if (body.message && body.message.ts) {
-        threadTs = body.message.ts;
-        logger.info(`Using message timestamp as thread: ${threadTs}`);
+      // Add followup message button if we have the required data
+      if (isSuccess && channelId && threadTs) {
+        const followupValue = {
+          summary: summary ? summary.slice(0, 500) : '',
+          actions: minutesData?.actions ? minutesData.actions.slice(0, 5) : [],
+          minutes: (minutesData?.minutes || detailedMinutes || '').slice(0, 800),
+          projectName: projectName,
+          channelId: channelId,
+          messageTs: body.message?.ts,
+          threadTs: threadTs
+        };
+        actionButtons.push({
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "✉️ お礼メッセージを作成",
+            emoji: true
+          },
+          value: JSON.stringify(followupValue).slice(0, 1900),
+          action_id: "open_followup_modal"
+        });
       }
-      
-      if (!threadTs) {
-        logger.warn('No thread timestamp found, message will be posted to channel');
-      }
+
+      // Add action buttons
+      confirmationBlocks.push({
+        type: "actions",
+        elements: actionButtons
+      });
       
       // Send confirmation blocks to the thread
       await client.chat.postMessage({

@@ -802,11 +802,21 @@ app.action('open_followup_modal', async ({ ack, action, body, client, logger }) 
     logger.warn('Failed to parse followup payload:', e.message);
   }
 
-  // Resolve sender display name from Slack user
+  // Resolve sender info from Slack user and brainbase
+  const slackUserId = body.user.id;
   let senderDisplay = '';
+  let brainbaseName = '';
   try {
-    const userInfo = await client.users.info({ user: body.user.id });
+    const userInfo = await client.users.info({ user: slackUserId });
     senderDisplay = userInfo.user?.real_name || userInfo.user?.name || '';
+
+    // Get brainbase name mapping
+    const { getSlackIdToBrainbaseName } = require('./slack-name-resolver');
+    const slackToBrainbase = await getSlackIdToBrainbaseName();
+    brainbaseName = slackToBrainbase.get(slackUserId) || '';
+    if (brainbaseName) {
+      logger.info(`Resolved brainbase name: ${brainbaseName} for Slack user ${slackUserId}`);
+    }
   } catch (e) {
     logger.warn('Failed to resolve sender name:', e.message);
   }
@@ -825,13 +835,15 @@ app.action('open_followup_modal', async ({ ack, action, body, client, logger }) 
     messageTs,
     threadTs,
     projectName: payload.projectName || '',
+    slackUserId,
     senderDisplay,
+    brainbaseName,
     summary: (payload.summary || '').slice(0, 500),
     actions: (payload.actions || []).slice(0, 5),
-    minutes: (payload.minutes || '').slice(0, 1500)
+    minutes: (payload.minutes || '').slice(0, 1200)
   };
   const privateMetadata = JSON.stringify(metadataObj);
-  logger.info('Followup modal private_metadata:', { channelId, messageTs, threadTs, length: privateMetadata.length });
+  logger.info('Followup modal private_metadata:', { channelId, messageTs, threadTs, slackUserId, brainbaseName, length: privateMetadata.length });
 
   try {
     await client.views.open({
@@ -848,7 +860,7 @@ app.action('open_followup_modal', async ({ ack, action, body, client, logger }) 
             type: "section",
             text: {
               type: "mrkdwn",
-              text: "宛先・送り手・補足を入力して「作成」を押すと、このスレッドに下書きが投稿されます。"
+              text: `送り手: *${brainbaseName || senderDisplay || 'あなた'}*\n宛先と補足を入力して「作成」を押すと、このスレッドに下書きが投稿されます。`
             }
           },
           {
@@ -861,18 +873,6 @@ app.action('open_followup_modal', async ({ ack, action, body, client, logger }) 
               action_id: "recipient_input",
               initial_value: recipientDisplay,
               placeholder: { type: "plain_text", text: "例: 田中様 / ○○社 ご担当者様" }
-            }
-          },
-          {
-            type: "input",
-            block_id: "sender_block",
-            label: { type: "plain_text", text: "送り手（任意）" },
-            optional: true,
-            element: {
-              type: "plain_text_input",
-              action_id: "sender_input",
-              initial_value: senderDisplay || '',
-              placeholder: { type: "plain_text", text: "例: 佐藤 圭吾（雲孫合同会社）" }
             }
           },
           {
@@ -900,7 +900,6 @@ app.view('followup_modal_config', async ({ ack, body, view, client, logger }) =>
   // Extract all data BEFORE ack()
   const state = view.state?.values || {};
   const recipient = state.recipient_block?.recipient_input?.value || 'ご担当者様';
-  const sender = state.sender_block?.sender_input?.value || '';
   const notes = state.notes_block?.notes_input?.value || '';
 
   let metadata = {};
@@ -914,6 +913,9 @@ app.view('followup_modal_config', async ({ ack, body, view, client, logger }) =>
   await ack();
   logger.info('=== FOLLOWUP CONFIG SUBMIT - Modal closed ===');
 
+  // Use sender info from metadata (auto-resolved from Slack user)
+  const sender = metadata.brainbaseName || metadata.senderDisplay || '';
+
   // Invoke Lambda async for LLM generation
   const asyncPayload = {
     type: 'followup_async',
@@ -923,6 +925,8 @@ app.view('followup_modal_config', async ({ ack, body, view, client, logger }) =>
     actions: metadata.actions || [],
     minutes: metadata.minutes || '',
     projectName: metadata.projectName || '',
+    slackUserId: metadata.slackUserId || '',
+    brainbaseName: metadata.brainbaseName || '',
     recipient,
     sender,
     userNotes: notes
@@ -2578,7 +2582,7 @@ module.exports.handler = async (event, context, callback) => {
     console.log('=== FOLLOWUP ASYNC HANDLER ===');
     console.log('Payload:', JSON.stringify(event));
 
-    const { channelId, threadTs, summary, actions, minutes, projectName, recipient, sender, userNotes } = event;
+    const { channelId, threadTs, summary, actions, minutes, projectName, recipient, sender, userNotes, brainbaseName } = event;
 
     if (!channelId) {
       console.error('No channelId in async payload');
@@ -2595,6 +2599,7 @@ module.exports.handler = async (event, context, callback) => {
         projectName,
         recipient,
         sender,
+        brainbaseName,
         userNotes
       });
     } catch (e) {

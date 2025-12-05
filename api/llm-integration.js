@@ -542,6 +542,91 @@ function findAssigneeSlackId(mapping, name) {
 }
 
 /**
+ * Follow-upメール（お礼＋決定事項共有）を生成
+ */
+async function generateFollowupMessage({
+  projectName = '',
+  summary = '',
+  actions = [],
+  minutes = '',
+  recipient = 'ご担当者様',
+  sender = '',
+  brainbaseName = '',
+  userNotes = ''
+}) {
+  const projectContext = await getProjectContext(projectName);
+
+  const actionLines = Array.isArray(actions) && actions.length > 0
+    ? actions.map(a => `- ${a.task}（${a.assignee || '担当未設定'}、${a.deadline || '期限未設定'}）`).join('\n')
+    : '- なし';
+
+  const minutesExcerpt = minutes ? minutes.slice(0, 4000) : '';
+
+  // Build sender context with brainbase name
+  const senderName = brainbaseName || sender || '（未指定）';
+  const senderContext = brainbaseName
+    ? `${brainbaseName}（brainbase登録名。この人の所属・役割情報がプロジェクトコンテキストにあれば参照して署名に活用）`
+    : senderName;
+
+  const prompt = `あなたはビジネスメール作成アシスタントです。以下の情報を基に、日本語で丁寧なお礼メールを作成してください。
+
+# 入力
+- 宛先: ${recipient || 'ご担当者様'}
+- 送り手: ${senderContext}
+- プロジェクト: ${projectName || '不明'}
+- 会議サマリ: ${summary || '未設定'}
+- 決定事項・Next Action:
+${actionLines}
+- 会議議事録（抜粋・Slack mrkdwn可）:
+${minutesExcerpt || '(なし)'}
+- 送り手メモ（トーンや伝えたい意図）:
+${userNotes || '(なし)'}
+
+${projectContext ? `# 参照用プロジェクトコンテキスト\n${projectContext.slice(0, 6000)}` : ''}
+
+# 出力形式（JSONのみ）
+\`\`\`json
+{
+  "subject": "メール件名",
+  "body": "本文（宛先敬称と署名まで含める。段落は改行で整形）"
+}
+\`\`\`
+
+# ガイドライン
+- 社外宛想定で丁寧語。社内っぽい場合でも丁寧めでよい。
+- 冒頭でお礼 → 本日の要約 → 決定事項/Next Action → 次のアクション依頼 → 締め。
+- 必要に応じて「ご確認事項」「期日」も短く入れる。
+- 署名は送り手名を末尾に入れる。brainbase名がある場合はその人の所属（会社名）も署名に含める。`;
+
+  const payload = {
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: 1200,
+    messages: [{
+      role: "user",
+      content: [{ type: "text", text: prompt }]
+    }]
+  };
+
+  const modelId = resolveModelId();
+
+  try {
+    const responseBody = await invokeBedrock(payload, modelId);
+    const text = responseBody.content?.[0]?.text || '';
+    const match = text.match(/```json\s*([\s\S]*?)\s*```/);
+    if (match) {
+      return JSON.parse(match[1]);
+    }
+    if (text.trim().startsWith('{')) {
+      return JSON.parse(text);
+    }
+    return null;
+  } catch (error) {
+    console.error("Failed to generate followup message:", error);
+    return null;
+  }
+}
+
+/**
  * Slackメッセージからタスクを抽出する
  * @param {string} message - Slackメッセージ本文
  * @param {string} channelName - チャンネル名（プロジェクト推定用）
@@ -639,5 +724,6 @@ module.exports = {
   getProjectContext,
   formatMinutesForGitHub,
   formatMinutesForSlack,
+  generateFollowupMessage,
   extractTaskFromMessage
-}; 
+};
