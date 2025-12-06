@@ -1,6 +1,24 @@
 const { BedrockRuntimeClient, InvokeModelCommand } = require("@aws-sdk/client-bedrock-runtime");
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 
+// Mastra切り替えフラグ（環境変数で制御）
+const USE_MASTRA = process.env.USE_MASTRA === 'true';
+
+// Mastraブリッジの遅延読み込み
+let mastraBridge = null;
+function getMastraBridge() {
+  if (!mastraBridge && USE_MASTRA) {
+    try {
+      mastraBridge = require('./dist/mastra/bridge.js');
+      console.log('Mastra bridge loaded successfully');
+    } catch (error) {
+      console.warn('Failed to load Mastra bridge, falling back to Bedrock:', error.message);
+      return null;
+    }
+  }
+  return mastraBridge;
+}
+
 // Force region to us-east-1 - Claude Sonnet 4 and 3.7 are available here
 const BEDROCK_REGION = "us-east-1";
 const BRAINBASE_CONTEXT_BUCKET = "brainbase-context-593793022993";
@@ -135,6 +153,13 @@ async function getProjectContext(projectName) {
 async function summarizeText(text) {
   if (!text || text.trim() === "") {
     return null;
+  }
+
+  // Mastraブリッジが有効な場合は委譲
+  const bridge = getMastraBridge();
+  if (bridge) {
+    console.log('Using Mastra bridge for summarizeText');
+    return bridge.summarizeText(text);
   }
 
   // 共通用語集を取得（固有名詞の修正用）
@@ -285,6 +310,13 @@ ${truncatedText}
 async function generateMeetingMinutes(text, projectName = null) {
   if (!text || text.trim() === "") {
     return null;
+  }
+
+  // Mastraブリッジが有効な場合は委譲
+  const bridge = getMastraBridge();
+  if (bridge) {
+    console.log('Using Mastra bridge for generateMeetingMinutes');
+    return bridge.generateMeetingMinutes(text, projectName);
   }
 
   // brainbaseコンテキストを取得
@@ -636,6 +668,13 @@ ${projectContext ? `# 参照用プロジェクトコンテキスト\n${projectCo
 async function extractTaskFromMessage(message, channelName = '', senderName = '') {
   if (!message || message.trim() === '') {
     return null;
+  }
+
+  // Mastraブリッジが有効な場合は委譲
+  const bridge = getMastraBridge();
+  if (bridge) {
+    console.log('Using Mastra bridge for extractTaskFromMessage');
+    return bridge.extractTaskFromMessage(message, channelName, senderName);
   }
 
   const modelId = resolveModelId();
