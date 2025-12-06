@@ -217,28 +217,65 @@ export const extractTasks = extractTaskFromMessage;
 
 /**
  * プロジェクトAI PMに問い合わせる
- * チャンネル名またはプロジェクトIDでAI PMを特定
+ * チャンネル名またはプロジェクトIDでAI PMを特定し、brainbaseコンテキストを付与
  */
 export async function askProjectPM(
   question: string,
-  options: { projectId?: string; channelName?: string; threadId?: string }
+  options: {
+    projectId?: string;
+    channelName?: string;
+    threadId?: string;
+    senderName?: string;
+    includeContext?: boolean;
+  }
 ): Promise<string> {
   let agent: any = null;
+  let projectId: string | undefined = options.projectId;
 
-  if (options.projectId) {
-    const pmId = `${options.projectId}PM`;
+  if (projectId) {
+    const pmId = `${projectId}PM`;
     agent = getAgent(pmId);
   } else if (options.channelName) {
     agent = getProjectPMByChannel(options.channelName);
+    // チャンネル名からプロジェクトIDを推定
+    const { getProjectByChannel } = await import('./config/projects.js');
+    const project = getProjectByChannel(options.channelName);
+    projectId = project?.id;
   }
 
   if (!agent) {
     return 'このチャンネルに対応するAI PMが見つかりません。';
   }
 
-  const result = await agent.generate(question);
+  // brainbaseコンテキストを取得（デフォルトで有効）
+  let contextSection = '';
+  if (options.includeContext !== false && projectId) {
+    const projectContext = await getProjectContext(projectId);
+    if (projectContext) {
+      contextSection = `
+# プロジェクトコンテキスト（brainbase）
+以下は${projectId}プロジェクトの最新情報です。回答時に参照してください。
 
-  return result.text;
+${projectContext.substring(0, 30000)}
+
+---
+
+`;
+    }
+  }
+
+  // 質問者情報を付与
+  const senderInfo = options.senderName ? `（質問者: ${options.senderName}）` : '';
+
+  const prompt = `${contextSection}${senderInfo}${question}`;
+
+  try {
+    const result = await agent.generate(prompt);
+    return result.text;
+  } catch (error) {
+    console.error('askProjectPM error:', error);
+    return 'すみません、回答の生成中にエラーが発生しました。';
+  }
 }
 
 interface MeetingMinutesResult {

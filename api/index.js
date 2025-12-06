@@ -1653,8 +1653,10 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
   }
 });
 
-// --- App Mention Handler (Phase 2: AI PM) ---
-// @mana へのメンションに応答してタスク登録
+// --- App Mention Handler (Phase 2: AI PM + Phase 5b: Project AI PM) ---
+// @mana へのメンションに応答
+// - 質問系: Project AI PMに転送（Phase 5b）
+// - タスク系: タスク登録（既存）
 app.event('app_mention', async ({ event, client, logger }) => {
   logger.info('=== APP_MENTION EVENT RECEIVED ===');
   logger.info(`Channel: ${event.channel}`);
@@ -1685,10 +1687,82 @@ app.event('app_mention', async ({ event, client, logger }) => {
       await client.chat.postMessage({
         channel: event.channel,
         thread_ts: event.ts,
-        text: '💭 タスク内容を入力してください。\n\n例: `@mana @担当者 〇〇の資料を作成する`'
+        text: '💭 何かお手伝いできることはありますか？\n\n• 質問: `@mana 〇〇について教えて`\n• タスク登録: `@mana @担当者 〇〇をお願い`'
       });
       return;
     }
+
+    // --- Phase 5b: 質問系メッセージの検出とAI PMへのルーティング ---
+    // 担当者メンションがなく、質問パターンにマッチする場合はAI PMモードに
+    const questionPatterns = [
+      /教えて|おしえて/,
+      /どう(なって|すれば|したら|いう)/,
+      /何(です|だ|を|が|の)/,
+      /いつ|どこ|だれ|なぜ|どうして/,
+      /わかる\?|わかりますか/,
+      /ありますか|ある\?/,
+      /できる\?|できますか/,
+      /状況|ステータス|進捗/,
+      /について$/,
+      /\?|？$/
+    ];
+
+    const isQuestion = assigneeMentions.length === 0 &&
+      questionPatterns.some(pattern => pattern.test(cleanedText));
+
+    if (isQuestion && process.env.USE_MASTRA === 'true') {
+      logger.info('Question detected, routing to Project AI PM');
+
+      // 処理中メッセージ
+      const processingMsg = await client.chat.postMessage({
+        channel: event.channel,
+        thread_ts: event.ts,
+        text: '🤔 考え中...'
+      });
+
+      // チャンネル名を取得
+      let channelName = event.channel;
+      try {
+        const channelInfo = await client.conversations.info({ channel: event.channel });
+        channelName = channelInfo.channel?.name || event.channel;
+      } catch (e) {
+        logger.warn('Failed to get channel name:', e.message);
+      }
+
+      // 送信者名を取得
+      let senderName = event.user;
+      try {
+        const userInfo = await client.users.info({ user: event.user });
+        senderName = userInfo.user?.real_name || userInfo.user?.name || event.user;
+      } catch (e) {
+        logger.warn('Failed to get user name:', e.message);
+      }
+
+      // Mastra AI PMに質問
+      try {
+        const { askProjectPM } = require('./dist/mastra/bridge.js');
+        const response = await askProjectPM(cleanedText, {
+          channelName,
+          senderName,
+          threadId: event.ts
+        });
+
+        await client.chat.update({
+          channel: event.channel,
+          ts: processingMsg.ts,
+          text: response
+        });
+      } catch (pmError) {
+        logger.error('AI PM error:', pmError);
+        await client.chat.update({
+          channel: event.channel,
+          ts: processingMsg.ts,
+          text: `💬 ${cleanedText}\n\n申し訳ありません。回答を生成できませんでした。`
+        });
+      }
+      return;
+    }
+    // --- End of Phase 5b ---
 
     // 担当者がいない場合は送信者を担当者にする
     const assigneeSlackId = assigneeMentions.length > 0 ? assigneeMentions[0] : event.user;
