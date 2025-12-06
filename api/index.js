@@ -1710,7 +1710,7 @@ app.event('app_mention', async ({ event, client, logger }) => {
     const isQuestion = assigneeMentions.length === 0 &&
       questionPatterns.some(pattern => pattern.test(cleanedText));
 
-    if (isQuestion && process.env.USE_MASTRA === 'true') {
+    if (isQuestion) {
       logger.info('Question detected, routing to Project AI PM');
 
       // 処理中メッセージ
