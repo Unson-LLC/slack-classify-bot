@@ -35,8 +35,8 @@
 ### 1. リポジトリのクローン
 
 ```bash
-git clone https://github.com/sintariran/slack-classify-bot.git
-cd slack-classify-bot
+git clone https://github.com/sintariran/mana.git
+cd mana
 ```
 
 ### 2. 環境変数の設定（オプション）
@@ -90,7 +90,7 @@ cd api
 ## 📁 プロジェクト構造
 
 ```
-slack-classify-bot/
+mana/
 ├── api/
 │   ├── lambda-handler.js      # Lambda関数メインハンドラー
 │   ├── n8n-integration.js     # n8n統合（メッセージ分類）
@@ -179,7 +179,7 @@ node lambda-handler.js
 
 ### ログ確認
 ```bash
-aws logs tail /aws/lambda/slack-classify-bot --follow
+aws logs tail /aws/lambda/mana --follow
 ```
 
 ## 🚀 デプロイオプション
@@ -201,7 +201,7 @@ sam deploy --guided
 cd api
 npm install
 npm run package
-aws lambda update-function-code --function-name slack-classify-bot --zip-file fileb://lambda-deployment.zip
+aws lambda update-function-code --function-name mana --zip-file fileb://lambda-deployment.zip
 ```
 
 ## 🤝 貢献

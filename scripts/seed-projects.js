@@ -12,15 +12,15 @@ const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
 // Initialize DynamoDB client
 const client = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(client);
-const tableName = 'slack-classify-bot-projects';
+const tableName = 'mana-projects';
 
 // Sample projects data
 const sampleProjects = [
   {
     project_id: 'proj_slack_classify_bot',
-    name: 'slack-classify-bot',
+    name: 'mana',
     owner: 'Unson-LLC',
-    repo: 'slack-classify-bot',
+    repo: 'mana',
     path_prefix: 'docs/meetings/',
     description: 'Slack bot for message classification and file processing',
     emoji: '🤖',

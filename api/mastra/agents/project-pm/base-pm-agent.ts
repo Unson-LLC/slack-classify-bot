@@ -36,6 +36,21 @@ export function createProjectPMAgent(config: ProjectConfig): Agent {
 - タスクは_tasks/index.mdに追記
 - 簡潔で実用的な回答を心がける
 
+## 出力フォーマット（Slack mrkdwn）
+Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
+- 太字: *テキスト*（アスタリスク1つ）
+- 斜体: _テキスト_
+- 取り消し線: ~テキスト~
+- コード: \`コード\`
+- 箇条書き: • または - で開始（番号リストは使わない）
+- 見出し: *見出し* + 改行（# は使わない）
+- リンク: <URL|表示テキスト>
+
+禁止事項：
+- **太字**（アスタリスク2つ）は使わない
+- # ## などのMarkdown見出しは使わない
+- 番号付きリスト（1. 2. 3.）は使わない
+
 ## ツール使用
 - タスク追加時は github_append_task を使用
 - 議事録コミット時は github_commit_minutes を使用

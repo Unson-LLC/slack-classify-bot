@@ -2,7 +2,7 @@
 
 # ==============================================================================
 # AWS Lambda Deployment Script
-# Deploys the slack-classify-bot to AWS Lambda.
+# Deploys mana (AI PM agent) to AWS Lambda.
 #
 # Process:
 # 1. Deletes any old deployment package.
@@ -16,7 +16,7 @@
 set -e # Exit immediately if a command fails
 
 REGION="us-east-1"
-FUNCTION_NAME="slack-classify-bot"
+FUNCTION_NAME="mana"
 ZIP_FILE="lambda-package.zip"
 API_DIR="api"
 ENV_FILE="env-vars-update.json"
@@ -70,7 +70,23 @@ echo "[3/6] Creating deployment package..."
   -x "*.map" \
   -x "./node_modules/@types/*" \
   -x "./node_modules/aws-sdk/dist/*" \
-  -x "./node_modules/aws-sdk/scripts/*")
+  -x "./node_modules/aws-sdk/scripts/*" \
+  -x "./node_modules/@mastra/*" \
+  -x "./node_modules/@ai-sdk/*" \
+  -x "./node_modules/ai/*" \
+  -x "./node_modules/zod/*" \
+  -x "./node_modules/zod-to-json-schema/*" \
+  -x "./node_modules/@opentelemetry/*" \
+  -x "./node_modules/onnxruntime-node/*" \
+  -x "./node_modules/cohere-ai/*" \
+  -x "./node_modules/js-tiktoken/*" \
+  -x "./node_modules/@modelcontextprotocol/*" \
+  -x "./node_modules/@libsql/*" \
+  -x "./node_modules/@redis/*" \
+  -x "./node_modules/@anush008/*" \
+  -x "./mastra/*" \
+  -x "./layer/*" \
+  -x "./*.zip")
 echo "      - Done."
 
 # 4. Update Function Code

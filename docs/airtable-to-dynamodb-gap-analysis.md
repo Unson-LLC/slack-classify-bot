@@ -84,11 +84,11 @@ processFileWithProject(action, body, client, logger, fileDataStore)
 
 ### 4. 現在のDynamoDB使用状況
 
-**既存テーブル**: `slack-classify-bot-processed-events`
+**既存テーブル**: `mana-processed-events`
 
 ```javascript
 {
-  TableName: "slack-classify-bot-processed-events",
+  TableName: "mana-processed-events",
   BillingMode: "PAY_PER_REQUEST",     // オンデマンド課金
   KeySchema: [{
     AttributeName: "event_key",
@@ -108,11 +108,11 @@ processFileWithProject(action, body, client, logger, fileDataStore)
 
 ### 1. DynamoDB設計
 
-#### 新規テーブル: `slack-classify-bot-projects`
+#### 新規テーブル: `mana-projects`
 
 ```javascript
 {
-  TableName: "slack-classify-bot-projects",
+  TableName: "mana-projects",
   BillingMode: "PAY_PER_REQUEST",
 
   KeySchema: [{
@@ -212,7 +212,7 @@ class ProjectRepository {
 |------|-------|-------|----------|
 | データソース | Airtable REST API | DynamoDB | API → SDK変更 |
 | 認証 | Bearer Token | IAM Role | 環境変数削減可能 |
-| テーブル名 | `project_id`, `slack_channels` | `slack-classify-bot-projects` | 統合 |
+| テーブル名 | `project_id`, `slack_channels` | `mana-projects` | 統合 |
 | データ取得 | 2段階（プロジェクト→チャネル） | 1段階（非正規化） | N+1問題解消 |
 
 ### Gap 2: キャッシュ戦略

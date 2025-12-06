@@ -60,7 +60,7 @@ describe('EventDeduplicationService', () => {
       const defaultService = new EventDeduplicationService();
       
       expect(DynamoDBClient).toHaveBeenCalledWith({ region: 'us-east-1' });
-      expect(defaultService.tableName).toBe('slack-classify-bot-processed-events');
+      expect(defaultService.tableName).toBe('mana-processed-events');
       expect(defaultService.ttlHours).toBe(6);
     });
 

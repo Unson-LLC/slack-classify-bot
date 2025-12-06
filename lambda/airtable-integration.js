@@ -239,7 +239,7 @@ class AirtableIntegration {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'User-Agent': 'slack-classify-bot/1.0 (fetch)'
+            'User-Agent': 'mana/1.0 (fetch)'
           },
           body: JSON.stringify(eventData),
           agent: agent, // Apply the custom agent

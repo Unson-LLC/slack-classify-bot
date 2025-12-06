@@ -26,8 +26,8 @@
 5. **Lambda関数コードの更新**
    ```bash
    aws lambda update-function-code \
-     --function-name slack-classify-bot \
-     --zip-file fileb://./slack-classify-bot.zip \
+     --function-name mana \
+     --zip-file fileb://./mana.zip \
      --profile k.sato \
      --region us-east-1
    ```
@@ -96,7 +96,7 @@ Lambda実行ロールには以下の権限が必要：
 
 ```bash
 aws lambda update-function-configuration \
-  --function-name slack-classify-bot \
+  --function-name mana \
   --environment "Variables={KEY=value}" \
   --profile k.sato \
   --region us-east-1
@@ -134,7 +134,7 @@ cd api && npm run package
 
 2. ZIPファイルの作成
    ```bash
-   zip -r ../slack-classify-bot.zip . \
+   zip -r ../mana.zip . \
      -x "*.git*" \
      -x "*test*" \
      -x "*.md" \
@@ -145,8 +145,8 @@ cd api && npm run package
 3. Lambdaへのアップロード
    ```bash
    aws lambda update-function-code \
-     --function-name slack-classify-bot \
-     --zip-file fileb://./slack-classify-bot.zip \
+     --function-name mana \
+     --zip-file fileb://./mana.zip \
      --profile k.sato \
      --region us-east-1
    ```
@@ -155,13 +155,13 @@ cd api && npm run package
 
 1. **CloudWatchログの確認**
    ```bash
-   aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region us-east-1
+   aws logs tail /aws/lambda/mana --follow --profile k.sato --region us-east-1
    ```
 
 2. **関数設定の確認**
    ```bash
    aws lambda get-function-configuration \
-     --function-name slack-classify-bot \
+     --function-name mana \
      --profile k.sato \
      --region us-east-1
    ```
@@ -169,7 +169,7 @@ cd api && npm run package
 3. **テスト実行**
    ```bash
    aws lambda invoke \
-     --function-name slack-classify-bot \
+     --function-name mana \
      --payload file://test-event.json \
      response.json \
      --profile k.sato \
@@ -187,7 +187,7 @@ cd api && npm run package
 2. **ロールバック実行**
    ```bash
    aws lambda update-function-code \
-     --function-name slack-classify-bot \
+     --function-name mana \
      --zip-file fileb://./previous-version.zip \
      --profile k.sato \
      --region us-east-1

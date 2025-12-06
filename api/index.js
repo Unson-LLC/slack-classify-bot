@@ -1663,6 +1663,31 @@ app.event('app_mention', async ({ event, client, logger }) => {
   logger.info(`User: ${event.user}`);
   logger.info(`Text: ${event.text}`);
 
+  // --- Deduplication check for app_mention ---
+  const mentionEventKey = `app_mention:${event.channel}:${event.ts}`;
+  const mentionMetadata = {
+    channel_id: event.channel,
+    user_id: event.user,
+    text_preview: event.text?.substring(0, 50),
+    lambda_instance_id: global.context?.awsRequestId || 'unknown'
+  };
+
+  try {
+    const { isNew, reason } = await deduplicationService.checkAndMarkProcessed(mentionEventKey, mentionMetadata);
+    if (!isNew) {
+      logger.info(`Duplicate app_mention detected (key: ${mentionEventKey}), reason: ${reason}`);
+      return;
+    }
+    logger.info(`Processing new app_mention event (key: ${mentionEventKey})`);
+  } catch (dedupError) {
+    logger.warn('Deduplication check failed, falling back to in-memory:', dedupError.message);
+    if (processedEvents.has(mentionEventKey)) {
+      logger.info(`Duplicate app_mention detected via fallback (key: ${mentionEventKey})`);
+      return;
+    }
+    processedEvents.set(mentionEventKey, Date.now());
+  }
+
   try {
     const { extractTaskFromMessage } = require('./llm-integration');
     const GitHubIntegration = require('./github-integration');
@@ -1738,20 +1763,67 @@ app.event('app_mention', async ({ event, client, logger }) => {
         logger.warn('Failed to get user name:', e.message);
       }
 
-      // Mastra AI PMに質問
+      // AI PMに質問（Mastraまたは既存Bedrockを使用）
       try {
-        const { askProjectPM } = require('./dist/mastra/bridge.js');
-        const response = await askProjectPM(cleanedText, {
-          channelName,
-          senderName,
-          threadId: event.ts
-        });
+        let response = null;
+
+        // Mastraブリッジを試す
+        try {
+          const mastraBridge = require('./dist/mastra/bridge.js');
+          logger.info('Using Mastra bridge for question');
+          response = await mastraBridge.askProjectPM(cleanedText, {
+            channelName,
+            senderName,
+            threadId: event.ts
+          });
+        } catch (e) {
+          // Mastra未ロード時は既存のBedrockを使用
+          logger.info('Mastra not available, using Bedrock directly');
+          const { getProjectContext } = require('./llm-integration');
+          const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
+
+          // チャンネルからプロジェクトを推定
+          let projectId = 'general';
+          if (channelName.includes('salestailor')) projectId = 'salestailor';
+          else if (channelName.includes('zeims')) projectId = 'zeims';
+          else if (channelName.includes('techknight')) projectId = 'techknight';
+          else if (channelName.includes('dialogai')) projectId = 'dialogai';
+          else if (channelName.includes('aitle')) projectId = 'aitle';
+
+          const projectContext = await getProjectContext(projectId);
+          const contextSection = projectContext
+            ? `\n# プロジェクトコンテキスト\n${projectContext.substring(0, 20000)}\n---\n`
+            : '';
+
+          const prompt = `${contextSection}
+あなたは${projectId}プロジェクトのAIアシスタントです。以下の質問に簡潔に回答してください。
+
+質問者: ${senderName}
+質問: ${cleanedText}`;
+
+          const bedrockClient = new BedrockRuntimeClient({ region: 'us-east-1' });
+          const command = new InvokeModelCommand({
+            modelId: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+            contentType: 'application/json',
+            body: JSON.stringify({
+              anthropic_version: 'bedrock-2023-05-31',
+              max_tokens: 2048,
+              messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }]
+            })
+          });
+
+          const bedrockResponse = await bedrockClient.send(command);
+          const decoded = new TextDecoder().decode(bedrockResponse.body);
+          const parsed = JSON.parse(decoded);
+          response = parsed.content?.[0]?.text || '回答を生成できませんでした。';
+        }
 
         await client.chat.update({
           channel: event.channel,
           ts: processingMsg.ts,
           text: response
         });
+        return;
       } catch (pmError) {
         logger.error('AI PM error:', pmError);
         await client.chat.update({
@@ -1759,8 +1831,8 @@ app.event('app_mention', async ({ event, client, logger }) => {
           ts: processingMsg.ts,
           text: `💬 ${cleanedText}\n\n申し訳ありません。回答を生成できませんでした。`
         });
+        return;
       }
-      return;
     }
     // --- End of Phase 5b ---
 

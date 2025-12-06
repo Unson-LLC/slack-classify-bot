@@ -43,7 +43,7 @@ npm run package
 ```bash
 # Create Lambda function (first time)
 aws lambda create-function \
-  --function-name slack-classify-bot \
+  --function-name mana \
   --runtime nodejs18.x \
   --role arn:aws:iam::YOUR-ACCOUNT:role/lambda-execution-role \
   --handler lambda-handler.handler \
@@ -144,7 +144,7 @@ npm run deploy
 ### Environment Variables Update
 ```bash
 aws lambda update-function-configuration \
-  --function-name slack-classify-bot \
+  --function-name mana \
   --environment Variables='{
     "SLACK_BOT_TOKEN":"xoxb-your-token",
     "SLACK_SIGNING_SECRET":"your-secret",
@@ -171,7 +171,7 @@ aws lambda update-function-configuration \
 
 Check CloudWatch Logs for detailed error messages:
 ```bash
-aws logs tail /aws/lambda/slack-classify-bot --follow
+aws logs tail /aws/lambda/mana --follow
 ```
 
 ## Cost Optimization

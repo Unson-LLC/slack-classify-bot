@@ -115,7 +115,7 @@ async function listSlackChannels(filter) {
     if (filter && channels.length > 0) {
       console.log('\n💡 DynamoDBに追加する場合:');
       console.log('aws dynamodb update-item \\');
-      console.log('  --table-name slack-classify-bot-projects \\');
+      console.log('  --table-name mana-projects \\');
       console.log('  --key \'{"project_id": {"S": "proj_XXX"}}\' \\');
       console.log('  --update-expression "SET slack_channels = :channels" \\');
       const channelIds = channels.map(c => `{"S": "${c.id}"}`).join(', ');

@@ -77,7 +77,7 @@ npm run test:coverage
 
 1. **CloudWatchログの確認**
    ```bash
-   aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region us-east-1
+   aws logs tail /aws/lambda/mana --follow --profile k.sato --region us-east-1
    ```
 
 2. **テストペイロードの使用**

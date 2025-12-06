@@ -16,7 +16,7 @@ const dynamodb = new AWS.DynamoDB.DocumentClient({
 
 class ProjectRepository {
   constructor() {
-    this.tableName = process.env.PROJECTS_TABLE_NAME || 'slack-classify-bot-projects';
+    this.tableName = process.env.PROJECTS_TABLE_NAME || 'mana-projects';
 
     // In-memory cache (per Lambda instance)
     this.projectsCache = null;

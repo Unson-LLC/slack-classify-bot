@@ -1,4 +1,4 @@
-# Terraform configuration for slack-classify-bot
+# Terraform configuration for mana
 terraform {
   required_version = ">= 1.0"
   
@@ -37,7 +37,7 @@ variable "environment_variables" {
 
 # DynamoDB Table for Event Deduplication
 resource "aws_dynamodb_table" "processed_events" {
-  name           = "slack-classify-bot-processed-events"
+  name           = "mana-processed-events"
   billing_mode   = "PAY_PER_REQUEST"
   hash_key       = "event_key"
 
@@ -52,7 +52,7 @@ resource "aws_dynamodb_table" "processed_events" {
   }
 
   tags = {
-    Application = "slack-classify-bot"
+    Application = "mana"
     Purpose     = "Event deduplication"
   }
 }
@@ -60,7 +60,7 @@ resource "aws_dynamodb_table" "processed_events" {
 # Lambda Function
 resource "aws_lambda_function" "slack_classify_bot" {
   filename         = "../api/lambda-package.zip"
-  function_name    = "slack-classify-bot"
+  function_name    = "mana"
   role            = aws_iam_role.lambda_execution_role.arn
   handler         = "index.handler"
   runtime         = "nodejs18.x"
@@ -84,7 +84,7 @@ resource "aws_lambda_function" "slack_classify_bot" {
   ]
 
   tags = {
-    Application = "slack-classify-bot"
+    Application = "mana"
   }
 }
 
@@ -103,7 +103,7 @@ resource "aws_lambda_function_url" "slack_classify_bot_url" {
 
 # IAM Role for Lambda
 resource "aws_iam_role" "lambda_execution_role" {
-  name = "slack-classify-bot-lambda-role"
+  name = "mana-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -117,23 +117,23 @@ resource "aws_iam_role" "lambda_execution_role" {
   })
 
   tags = {
-    Application = "slack-classify-bot"
+    Application = "mana"
   }
 }
 
 # CloudWatch Logs
 resource "aws_cloudwatch_log_group" "lambda_logs" {
-  name              = "/aws/lambda/slack-classify-bot"
+  name              = "/aws/lambda/mana"
   retention_in_days = 14
 
   tags = {
-    Application = "slack-classify-bot"
+    Application = "mana"
   }
 }
 
 # Basic Lambda Execution Policy
 resource "aws_iam_role_policy" "lambda_logs_policy" {
-  name = "slack-classify-bot-lambda-logs"
+  name = "mana-lambda-logs"
   role = aws_iam_role.lambda_execution_role.id
 
   policy = jsonencode({
@@ -152,7 +152,7 @@ resource "aws_iam_role_policy" "lambda_logs_policy" {
 
 # DynamoDB Access Policy
 resource "aws_iam_role_policy" "lambda_dynamodb_policy" {
-  name = "slack-classify-bot-lambda-dynamodb"
+  name = "mana-lambda-dynamodb"
   role = aws_iam_role.lambda_execution_role.id
 
   policy = jsonencode({
@@ -171,7 +171,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb_policy" {
 
 # Bedrock Access Policy
 resource "aws_iam_role_policy" "lambda_bedrock_policy" {
-  name = "slack-classify-bot-lambda-bedrock"
+  name = "mana-lambda-bedrock"
   role = aws_iam_role.lambda_execution_role.id
 
   policy = jsonencode({

@@ -13,7 +13,7 @@ Slack Botの重複投稿問題を解決するため、AWS DynamoDBを使用し�
 
 ### 1. DynamoDBテーブル設計
 
-**テーブル名**: `slack-classify-bot-processed-events`
+**テーブル名**: `mana-processed-events`
 
 **スキーマ**:
 ```
@@ -61,7 +61,7 @@ class EventDeduplicationService {
   constructor() {
     const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
     this.docClient = DynamoDBDocumentClient.from(client);
-    this.tableName = process.env.DEDUP_TABLE_NAME || 'slack-classify-bot-processed-events';
+    this.tableName = process.env.DEDUP_TABLE_NAME || 'mana-processed-events';
     this.ttlHours = 6; // 6時間後に自動削除
   }
 }
@@ -125,7 +125,7 @@ if (!isNew) {
 ProcessedEventsTable:
   Type: AWS::DynamoDB::Table
   Properties:
-    TableName: slack-classify-bot-processed-events
+    TableName: mana-processed-events
     BillingMode: PAY_PER_REQUEST
     AttributeDefinitions:
       - AttributeName: event_key
@@ -138,7 +138,7 @@ ProcessedEventsTable:
       Enabled: true
     Tags:
       - Key: Application
-        Value: slack-classify-bot
+        Value: mana
 ```
 
 #### 4.2 Lambda IAMロールへの権限追加

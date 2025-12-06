@@ -14,7 +14,7 @@ const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
 // Initialize DynamoDB client
 const client = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(client);
-const tableName = 'slack-classify-bot-projects';
+const tableName = 'mana-projects';
 
 // Parse CSV (simple parser)
 function parseCSV(filePath) {

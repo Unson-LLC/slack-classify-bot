@@ -28,7 +28,7 @@ const skipIntegrationTests = !process.env.INTEGRATION_TEST && !process.env.CI;
 const describeIntegration = skipIntegrationTests ? describe.skip : describe;
 
 // 既存のテーブルを使用（CreateTable権限がないため）
-const TEST_TABLE_NAME = 'slack-classify-bot-processed-events';
+const TEST_TABLE_NAME = 'mana-processed-events';
 
 describeIntegration('DynamoDB Integration', () => {
   let dynamoClient;
@@ -51,7 +51,7 @@ describeIntegration('DynamoDB Integration', () => {
     } catch (error) {
       if (error.name === 'ResourceNotFoundException') {
         console.error(`Table ${TEST_TABLE_NAME} does not exist. Please create it first.`);
-        throw new Error('Test table does not exist. Run: aws dynamodb create-table --table-name slack-classify-bot-processed-events --attribute-definitions AttributeName=event_key,AttributeType=S --key-schema AttributeName=event_key,KeyType=HASH --billing-mode PAY_PER_REQUEST');
+        throw new Error('Test table does not exist. Run: aws dynamodb create-table --table-name mana-processed-events --attribute-definitions AttributeName=event_key,AttributeType=S --key-schema AttributeName=event_key,KeyType=HASH --billing-mode PAY_PER_REQUEST');
       }
       throw error;
     }

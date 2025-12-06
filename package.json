@@ -1,7 +1,7 @@
 {
-  "name": "slack-classify-bot",
-  "version": "1.0.0",
-  "description": "Slack bot for message classification and file processing using AWS Lambda and n8n workflows",
+  "name": "mana",
+  "version": "2.0.0",
+  "description": "AI PM agent for brainbase - task management, meeting minutes, and project orchestration via Slack",
   "main": "api/lambda-handler.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -11,24 +11,25 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sintariran/slack-classify-bot.git"
+    "url": "git+https://github.com/sintariran/mana.git"
   },
   "keywords": [
     "slack",
-    "bot",
+    "ai",
+    "pm",
+    "task-management",
     "lambda",
     "aws",
-    "classification",
-    "n8n",
+    "brainbase",
     "serverless"
   ],
-  "author": "Your Name",
+  "author": "UNSON Inc.",
   "license": "MIT",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/sintariran/slack-classify-bot/issues"
+    "url": "https://github.com/sintariran/mana/issues"
   },
-  "homepage": "https://github.com/sintariran/slack-classify-bot#readme",
+  "homepage": "https://github.com/sintariran/mana#readme",
   "engines": {
     "node": ">=18.0.0"
   }

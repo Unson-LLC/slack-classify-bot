@@ -17,6 +17,11 @@ const WORKSPACE_CONFIG = {
     name: 'Tech Knight',
     tokenEnvVar: 'SLACK_BOT_TOKEN_TECHKNIGHT',
     priority: 'medium'
+  },
+  salestailor: {
+    name: 'SalesTailor',
+    tokenEnvVar: 'SLACK_BOT_TOKEN_SALESTAILOR',
+    priority: 'medium'
   }
 };
 

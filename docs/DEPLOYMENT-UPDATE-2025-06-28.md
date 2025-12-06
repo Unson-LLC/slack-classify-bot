@@ -11,7 +11,7 @@ AWS Lambdaの同時実行により、複数のインスタンスが同じSlack�
 ## 解決策
 
 ### 1. DynamoDBテーブルの追加
-- テーブル名: `slack-classify-bot-processed-events`
+- テーブル名: `mana-processed-events`
 - プライマリキー: `event_key` (String)
 - TTL: 6時間後に自動削除
 - 料金: 月額約0.08円（現在の利用量）
@@ -52,7 +52,7 @@ npm run deploy
 ```bash
 # 1. DynamoDBテーブルを作成
 aws dynamodb create-table \
-  --table-name slack-classify-bot-processed-events \
+  --table-name mana-processed-events \
   --attribute-definitions AttributeName=event_key,AttributeType=S \
   --key-schema AttributeName=event_key,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST \
@@ -61,7 +61,7 @@ aws dynamodb create-table \
 
 # 2. TTLを有効化
 aws dynamodb update-time-to-live \
-  --table-name slack-classify-bot-processed-events \
+  --table-name mana-processed-events \
   --time-to-live-specification "Enabled=true,AttributeName=ttl" \
   --region us-east-1 \
   --profile k.sato
@@ -71,8 +71,8 @@ aws dynamodb update-time-to-live \
 
 # 4. 環境変数を追加
 aws lambda update-function-configuration \
-  --function-name slack-classify-bot \
-  --environment "Variables={DEDUP_TABLE_NAME=slack-classify-bot-processed-events,...既存の環境変数...}" \
+  --function-name mana \
+  --environment "Variables={DEDUP_TABLE_NAME=mana-processed-events,...既存の環境変数...}" \
   --region us-east-1 \
   --profile k.sato
 
@@ -84,7 +84,7 @@ npm run deploy
 
 ```bash
 # CloudWatchログで重複排除の動作を確認
-aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region us-east-1
+aws logs tail /aws/lambda/mana --follow --profile k.sato --region us-east-1
 
 # 以下のようなログが表示されれば成功:
 # "DynamoDB deduplication enabled"
@@ -103,7 +103,7 @@ npm run deploy
 
 # 2. DynamoDBテーブルを削除（オプション）
 aws dynamodb delete-table \
-  --table-name slack-classify-bot-processed-events \
+  --table-name mana-processed-events \
   --region us-east-1 \
   --profile k.sato
 ```

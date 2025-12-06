@@ -15,7 +15,7 @@ const dynamodb = new AWS.DynamoDB.DocumentClient({
 
 class EventDeduplicationService {
   constructor() {
-    this.tableName = process.env.DEDUP_TABLE_NAME || 'slack-classify-bot-processed-events';
+    this.tableName = process.env.DEDUP_TABLE_NAME || 'mana-processed-events';
     this.ttlHours = 6;
   }
 

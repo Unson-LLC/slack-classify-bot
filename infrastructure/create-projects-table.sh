@@ -4,7 +4,7 @@
 set -e
 
 REGION="us-east-1"
-TABLE_NAME="slack-classify-bot-projects"
+TABLE_NAME="mana-projects"
 PROFILE="k.sato"
 
 echo "🚀 Creating DynamoDB table: $TABLE_NAME in $REGION..."
@@ -17,7 +17,7 @@ aws dynamodb create-table \
     AttributeName=project_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST \
   --tags \
-    Key=Application,Value=slack-classify-bot \
+    Key=Application,Value=mana \
     Key=Environment,Value=production \
   --region "$REGION" \
   --profile "$PROFILE" \

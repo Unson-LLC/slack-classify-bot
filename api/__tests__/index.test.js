@@ -148,7 +148,7 @@ describe('Lambda Handler Integration Tests', () => {
       await handler(event, {});
       
       // Check that version was logged
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('---slack-classify-bot--- Version:'));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('---mana--- Version:'));
       
       consoleSpy.mockRestore();
     });

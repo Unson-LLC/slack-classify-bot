@@ -6,7 +6,7 @@ const path = require('path');
 const CODEX_PATH = path.join(__dirname, '..', '_codex');
 const OUTPUT_PATH = path.join(__dirname, '..', 'context-output');
 
-// brainbaseプロジェクト → slack-classify-bot側の別名マッピング
+// brainbaseプロジェクト → mana側の別名マッピング
 // 同じコンテキストを複数の名前で出力する
 const PROJECT_ALIASES = {
   'techknight': ['tech-knight-board', 'aitle'],

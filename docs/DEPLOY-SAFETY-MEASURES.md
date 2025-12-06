@@ -47,7 +47,7 @@
 ```bash
 # env.jsonを編集後
 aws lambda update-function-configuration \
-  --function-name slack-classify-bot \
+  --function-name mana \
   --environment "file://api/env.json" \
   --profile k.sato \
   --region us-east-1

@@ -43,7 +43,7 @@
 1. 環境変数の確認
    ```bash
    aws lambda get-function-configuration \
-     --function-name slack-classify-bot \
+     --function-name mana \
      --query 'Environment.Variables.SLACK_SIGNING_SECRET' \
      --profile k.sato \
      --region us-east-1
@@ -176,11 +176,11 @@
 
 ```bash
 # リアルタイムログ監視
-aws logs tail /aws/lambda/slack-classify-bot --follow --profile k.sato --region us-east-1
+aws logs tail /aws/lambda/mana --follow --profile k.sato --region us-east-1
 
 # 特定時間範囲のログ取得
 aws logs filter-log-events \
-  --log-group-name /aws/lambda/slack-classify-bot \
+  --log-group-name /aws/lambda/mana \
   --start-time $(date -u -d '1 hour ago' +%s)000 \
   --profile k.sato \
   --region us-east-1
@@ -191,13 +191,13 @@ aws logs filter-log-events \
 ```bash
 # 関数設定の確認
 aws lambda get-function-configuration \
-  --function-name slack-classify-bot \
+  --function-name mana \
   --profile k.sato \
   --region us-east-1
 
 # 関数の最終更新時刻
 aws lambda get-function \
-  --function-name slack-classify-bot \
+  --function-name mana \
   --query 'Configuration.LastModified' \
   --profile k.sato \
   --region us-east-1
@@ -208,7 +208,7 @@ aws lambda get-function \
 ```bash
 # テストイベントでの実行
 aws lambda invoke \
-  --function-name slack-classify-bot \
+  --function-name mana \
   --payload file://test-event.json \
   --log-type Tail \
   response.json \
