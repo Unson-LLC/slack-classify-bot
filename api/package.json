@@ -1,5 +1,5 @@
 {
-  "name": "slack-classify-bot-lambda",
+  "name": "mana-lambda",
   "version": "1.0.0",
   "description": "Slack bot for message classification and file processing using AWS Lambda",
   "main": "index.js",
@@ -8,8 +8,9 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "package": "zip -r lambda-deployment.zip . -x \"*.git*\" \"node_modules/.cache/*\" \"*.DS_Store*\"",
-    "deploy": "aws lambda update-function-code --function-name slack-classify-bot --zip-file fileb://lambda-deployment.zip"
+    "build:mastra": "tsc -p tsconfig.mastra.json",
+    "package": "npm run build:mastra && zip -r lambda-deployment.zip . -x \"*.git*\" \"node_modules/.cache/*\" \"*.DS_Store*\" \"mastra/*.ts\"",
+    "deploy": "aws lambda update-function-code --function-name mana --zip-file fileb://lambda-deployment.zip"
   },
   "keywords": [
     "slack",
@@ -17,29 +18,41 @@
     "lambda",
     "aws",
     "classification",
-    "n8n"
+    "n8n",
+    "mastra",
+    "ai-agent"
   ],
-  "author": "Your Name",
+  "author": "UNSON Inc.",
   "license": "MIT",
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^2.2.1",
+    "@ai-sdk/anthropic": "^1.2.1",
     "@aws-sdk/client-bedrock-runtime": "^3.600.0",
-    "aws-sdk": "^2.1692.0",
+    "@aws-sdk/client-s3": "^3.943.0",
+    "@mastra/core": "^0.6.4",
+    "@mastra/mcp": "^0.3.6",
+    "@mastra/memory": "^0.2.5",
     "@slack/bolt": "^3.17.1",
+    "ai": "^4.2.6",
     "airtable": "^0.12.2",
+    "aws-sdk": "^2.1692.0",
     "axios": "^1.6.2",
-    "dotenv": "^16.5.0"
+    "dotenv": "^16.5.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
+    "@types/node": "^20.17.16",
     "aws-sdk-client-mock": "^3.0.0",
     "aws-sdk-client-mock-jest": "^3.0.0",
-    "jest": "^29.7.0"
+    "jest": "^29.7.0",
+    "typescript": "^5.7.3"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sintariran/slack-classify-bot.git"
+    "url": "https://github.com/sintariran/mana.git"
   }
 }
