@@ -1,17 +1,14 @@
-"use strict";
 // mastra/agents/project-pm/base-pm-agent.ts
 // L2: プロジェクト単位AI PM ベースクラス
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createProjectPMAgent = createProjectPMAgent;
-const agent_1 = require("@mastra/core/agent");
-const llm_provider_js_1 = require("../../config/llm-provider.js");
-const github_js_1 = require("../../tools/github.js");
-const slack_js_1 = require("../../tools/slack.js");
+import { Agent } from '@mastra/core/agent';
+import { defaultModel } from '../../config/llm-provider.js';
+import { githubAppendTaskTool, githubCommitMinutesTool } from '../../tools/github.js';
+import { slackPostMessageTool, slackAddReactionTool } from '../../tools/slack.js';
 /**
  * プロジェクト単位のAI PMエージェントを生成する
  * 各プロジェクトに固有の設定とコンテキストを持つ
  */
-function createProjectPMAgent(config) {
+export function createProjectPMAgent(config) {
     const instructions = `あなたは${config.name}プロジェクト専属のAI PMです。
 
 ## プロジェクト情報
@@ -59,15 +56,16 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 ## 注意事項
 - 他プロジェクトの話題には関与しない（該当AI PMに委譲）
 - 判断が難しい場合は人間にエスカレーション`;
-    return new agent_1.Agent({
+    return new Agent({
+        id: `${config.id}-pm`,
         name: `${config.name} AI PM`,
         instructions,
-        model: llm_provider_js_1.defaultModel,
+        model: defaultModel,
         tools: {
-            github_append_task: github_js_1.githubAppendTaskTool,
-            github_commit_minutes: github_js_1.githubCommitMinutesTool,
-            slack_post_message: slack_js_1.slackPostMessageTool,
-            slack_add_reaction: slack_js_1.slackAddReactionTool,
+            github_append_task: githubAppendTaskTool,
+            github_commit_minutes: githubCommitMinutesTool,
+            slack_post_message: slackPostMessageTool,
+            slack_add_reaction: slackAddReactionTool,
         },
     });
 }

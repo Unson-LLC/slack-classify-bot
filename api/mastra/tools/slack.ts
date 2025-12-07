@@ -2,7 +2,7 @@
 // Slackツール - メッセージ送信、リアクション等
 
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 // メッセージ送信ツール
 export const slackPostMessageTool = createTool({
@@ -12,10 +12,9 @@ export const slackPostMessageTool = createTool({
     channel: z.string().describe('チャンネルID'),
     text: z.string().describe('メッセージ本文'),
     threadTs: z.string().optional().describe('スレッドのタイムスタンプ（返信時）'),
-    blocks: z.array(z.any()).optional().describe('Block Kit形式のUI'),
   }),
-  execute: async ({ context: inputContext }) => {
-    const { channel, text, threadTs, blocks } = inputContext;
+  execute: async (input) => {
+    const { channel, text, threadTs } = input;
 
     // Slack Boltクライアントは外部から注入する想定
     // 実際の実行時はbridge経由でapp.clientを渡す
@@ -33,7 +32,6 @@ export const slackPostMessageTool = createTool({
         channel,
         text,
         thread_ts: threadTs,
-        blocks,
       });
 
       return {
@@ -59,8 +57,8 @@ export const slackAddReactionTool = createTool({
     timestamp: z.string().describe('メッセージのタイムスタンプ'),
     emoji: z.string().describe('絵文字名（例: white_check_mark）'),
   }),
-  execute: async ({ context: inputContext }) => {
-    const { channel, timestamp, emoji } = inputContext;
+  execute: async (input) => {
+    const { channel, timestamp, emoji } = input;
 
     const slackClient = (global as any).__manaSlackClient;
 
@@ -98,8 +96,8 @@ export const slackGetUserInfoTool = createTool({
   inputSchema: z.object({
     userId: z.string().describe('SlackユーザーID'),
   }),
-  execute: async ({ context: inputContext }) => {
-    const { userId } = inputContext;
+  execute: async (input) => {
+    const { userId } = input;
 
     const slackClient = (global as any).__manaSlackClient;
 

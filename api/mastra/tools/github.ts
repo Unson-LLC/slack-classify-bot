@@ -2,7 +2,7 @@
 // GitHubツール - タスク追加、議事録コミット等
 
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 // タスク追加ツール
 export const githubAppendTaskTool = createTool({
@@ -16,8 +16,8 @@ export const githubAppendTaskTool = createTool({
     context: z.string().optional().describe('背景・詳細'),
     slackLink: z.string().optional().describe('Slackメッセージへのリンク'),
   }),
-  execute: async ({ context: inputContext }) => {
-    const { title, projectId, assignee, due, context, slackLink } = inputContext;
+  execute: async (input) => {
+    const { title, projectId, assignee, due, context, slackLink } = input;
 
     // 既存のgithub-integration.jsのappendTask関数を呼び出し
     // 将来的にはここで直接GitHub APIを呼び出す
@@ -58,8 +58,8 @@ export const githubCommitMinutesTool = createTool({
     topic: z.string().describe('議題'),
     content: z.string().describe('議事録内容（Markdown）'),
   }),
-  execute: async ({ context: inputContext }) => {
-    const { projectId, date, topic, content } = inputContext;
+  execute: async (input) => {
+    const { projectId, date, topic, content } = input;
 
     const GitHubIntegration = require('../../github-integration');
     const github = new GitHubIntegration();

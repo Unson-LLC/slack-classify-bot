@@ -1,37 +1,52 @@
-"use strict";
 // mastra/bridge.ts
 // 既存JavaScriptコードからMastraエージェントを呼び出すブリッジ
 // llm-integration.jsとの互換性を提供
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.extractTasks = exports.summarizeMeeting = void 0;
-exports.setSlackClient = setSlackClient;
-exports.getProjectContext = getProjectContext;
-exports.getCommonGlossary = getCommonGlossary;
-exports.summarizeText = summarizeText;
-exports.extractTaskFromMessage = extractTaskFromMessage;
-exports.askProjectPM = askProjectPM;
-exports.generateMeetingMinutes = generateMeetingMinutes;
-exports.generateAndCommitMinutes = generateAndCommitMinutes;
-const index_js_1 = require("./index.js");
-const client_s3_1 = require("@aws-sdk/client-s3");
+import { getProjectPMByChannel, getAgent, allAgents } from './index.js';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 const BEDROCK_REGION = 'us-east-1';
 const BRAINBASE_CONTEXT_BUCKET = 'brainbase-context-593793022993';
+// プロジェクト名のキーワードマッピング（質問文から検出用）
+const PROJECT_KEYWORDS = {
+    'zeims': ['zeims', 'ゼイムス', '採用管理', '採用'],
+    'salestailor': ['salestailor', 'セールステイラー', 'セールスレター'],
+    'techknight': ['techknight', 'テックナイト', 'tech knight', 'エンジニアリング'],
+    'aitle': ['aitle', 'アイトル', 'タイトル生成'],
+    'dialogai': ['dialogai', 'ダイアログ', '会議ファシリ'],
+    'senrigan': ['senrigan', 'センリガン', '千里眼'],
+    'baao': ['baao', 'バーオ'],
+    'brainbase': ['brainbase', 'ブレインベース'],
+};
+/**
+ * 質問文からプロジェクトIDを検出する
+ */
+function detectProjectFromQuestion(question) {
+    const lowerQuestion = question.toLowerCase();
+    for (const [projectId, keywords] of Object.entries(PROJECT_KEYWORDS)) {
+        for (const keyword of keywords) {
+            if (lowerQuestion.includes(keyword.toLowerCase())) {
+                console.log(`Detected project "${projectId}" from keyword "${keyword}"`);
+                return projectId;
+            }
+        }
+    }
+    return null;
+}
 /**
  * Slackクライアントを設定する
  * 既存のindex.jsから呼び出して、Slackツールが使えるようにする
  */
-function setSlackClient(client) {
+export function setSlackClient(client) {
     global.__manaSlackClient = client;
 }
 /**
  * S3からプロジェクトコンテキストを取得（llm-integration.js互換）
  */
-async function getProjectContext(projectName) {
+export async function getProjectContext(projectName) {
     if (!projectName)
         return null;
-    const s3Client = new client_s3_1.S3Client({ region: BEDROCK_REGION });
+    const s3Client = new S3Client({ region: BEDROCK_REGION });
     try {
-        const command = new client_s3_1.GetObjectCommand({
+        const command = new GetObjectCommand({
             Bucket: BRAINBASE_CONTEXT_BUCKET,
             Key: `${projectName}.txt`,
         });
@@ -53,10 +68,10 @@ async function getProjectContext(projectName) {
 /**
  * S3から共通用語集を取得
  */
-async function getCommonGlossary() {
-    const s3Client = new client_s3_1.S3Client({ region: BEDROCK_REGION });
+export async function getCommonGlossary() {
+    const s3Client = new S3Client({ region: BEDROCK_REGION });
     try {
-        const command = new client_s3_1.GetObjectCommand({
+        const command = new GetObjectCommand({
             Bucket: BRAINBASE_CONTEXT_BUCKET,
             Key: 'brainbase.txt',
         });
@@ -80,10 +95,10 @@ async function getCommonGlossary() {
  * 会議要約を生成する（llm-integration.js互換）
  * 既存のsummarizeText()を置き換え
  */
-async function summarizeText(text) {
+export async function summarizeText(text) {
     if (!text || text.trim() === '')
         return null;
-    const agent = index_js_1.allAgents.meetingAgent;
+    const agent = allAgents.meetingAgent;
     if (!agent) {
         throw new Error('Meeting agent not found');
     }
@@ -117,7 +132,7 @@ ${glossarySection}
 ${text.substring(0, 180000)}
 `;
     try {
-        const result = await agent.generate(prompt);
+        const result = await agent.generateLegacy(prompt);
         return result.text;
     }
     catch (error) {
@@ -126,14 +141,14 @@ ${text.substring(0, 180000)}
     }
 }
 // 後方互換性のためのエイリアス
-exports.summarizeMeeting = summarizeText;
+export const summarizeMeeting = summarizeText;
 /**
  * Slackメッセージからタスクを抽出する（llm-integration.js互換）
  */
-async function extractTaskFromMessage(message, channelName = '', senderName = '') {
+export async function extractTaskFromMessage(message, channelName = '', senderName = '') {
     if (!message || message.trim() === '')
         return null;
-    const agent = index_js_1.allAgents.taskAgent;
+    const agent = allAgents.taskAgent;
     if (!agent) {
         throw new Error('Task agent not found');
     }
@@ -171,7 +186,7 @@ JSONのみを出力してください。
 - 内容が短くても必ずJSON形式で出力してください
 `;
     try {
-        const result = await agent.generate(prompt);
+        const result = await agent.generateLegacy(prompt);
         const rawResponse = result.text;
         // Parse JSON from response
         const jsonMatch = rawResponse.match(/\`\`\`json\s*([\s\S]*?)\s*\`\`\`/);
@@ -196,34 +211,53 @@ JSONのみを出力してください。
     }
 }
 // 後方互換性のためのエイリアス
-exports.extractTasks = extractTaskFromMessage;
+export const extractTasks = extractTaskFromMessage;
 /**
  * プロジェクトAI PMに問い合わせる
  * チャンネル名またはプロジェクトIDでAI PMを特定し、brainbaseコンテキストを付与
  */
-async function askProjectPM(question, options) {
+export async function askProjectPM(question, options) {
     let agent = null;
     let projectId = options.projectId;
+    // 1. 明示的なプロジェクトIDがあればそれを使用
     if (projectId) {
         const pmId = `${projectId}PM`;
-        agent = (0, index_js_1.getAgent)(pmId);
+        agent = getAgent(pmId);
     }
-    else if (options.channelName) {
-        agent = (0, index_js_1.getProjectPMByChannel)(options.channelName);
-        // チャンネル名からプロジェクトIDを推定
+    // 2. チャンネル名からプロジェクトを推定
+    if (!agent && options.channelName) {
+        agent = getProjectPMByChannel(options.channelName);
         const { getProjectByChannel } = await import('./config/projects.js');
         const project = getProjectByChannel(options.channelName);
         projectId = project?.id;
     }
-    if (!agent) {
-        return 'このチャンネルに対応するAI PMが見つかりません。';
+    // 3. 質問文からプロジェクトを検出（フォールバック）
+    if (!projectId) {
+        const detectedProject = detectProjectFromQuestion(question);
+        if (detectedProject) {
+            projectId = detectedProject;
+            const pmId = `${detectedProject}PM`;
+            agent = getAgent(pmId);
+            console.log(`Using detected project "${detectedProject}" from question`);
+        }
     }
-    // brainbaseコンテキストを取得（デフォルトで有効）
+    // 4. どれにも該当しない場合は汎用エージェントを使用
+    if (!agent) {
+        // meetingAgentを汎用的に使用（将来的にはgeneralPMを作成）
+        agent = allAgents.meetingAgent;
+        console.log('No specific project detected, using general agent');
+    }
+    if (!agent) {
+        return 'エージェントの初期化に失敗しました。';
+    }
+    // brainbaseコンテキストを取得
     let contextSection = '';
-    if (options.includeContext !== false && projectId) {
-        const projectContext = await getProjectContext(projectId);
-        if (projectContext) {
-            contextSection = `
+    if (options.includeContext !== false) {
+        if (projectId) {
+            // 特定プロジェクトのコンテキスト
+            const projectContext = await getProjectContext(projectId);
+            if (projectContext) {
+                contextSection = `
 # プロジェクトコンテキスト（brainbase）
 以下は${projectId}プロジェクトの最新情報です。回答時に参照してください。
 
@@ -232,13 +266,27 @@ ${projectContext.substring(0, 30000)}
 ---
 
 `;
+            }
+        }
+        else {
+            // プロジェクト不明の場合は共通用語集のみ
+            const glossary = await getCommonGlossary();
+            if (glossary) {
+                contextSection = `
+# 共通コンテキスト（brainbase）
+${glossary}
+
+---
+
+`;
+            }
         }
     }
     // 質問者情報を付与
     const senderInfo = options.senderName ? `（質問者: ${options.senderName}）` : '';
     const prompt = `${contextSection}${senderInfo}${question}`;
     try {
-        const result = await agent.generate(prompt);
+        const result = await agent.generateLegacy(prompt);
         return result.text;
     }
     catch (error) {
@@ -249,10 +297,10 @@ ${projectContext.substring(0, 30000)}
 /**
  * 文字起こしデータから詳細な議事録を生成する（llm-integration.js互換）
  */
-async function generateMeetingMinutes(text, projectName = null) {
+export async function generateMeetingMinutes(text, projectName = null) {
     if (!text || text.trim() === '')
         return null;
-    const agent = index_js_1.allAgents.meetingAgent;
+    const agent = allAgents.meetingAgent;
     if (!agent) {
         throw new Error('Meeting agent not found');
     }
@@ -309,7 +357,7 @@ ${contextSection}
 ${text.substring(0, 180000)}
 `;
     try {
-        const result = await agent.generate(prompt);
+        const result = await agent.generateLegacy(prompt);
         const rawResponse = result.text;
         // Parse JSON response
         const jsonMatch = rawResponse.match(/\`\`\`json\s*([\s\S]*?)\s*\`\`\`/);
@@ -342,7 +390,7 @@ ${text.substring(0, 180000)}
 /**
  * 議事録を生成してGitHubにコミットする
  */
-async function generateAndCommitMinutes(transcript, options) {
+export async function generateAndCommitMinutes(transcript, options) {
     const minutesData = await generateMeetingMinutes(transcript, options.projectId);
     if (!minutesData) {
         return { summary: '', nextActions: '' };
@@ -355,18 +403,5 @@ async function generateAndCommitMinutes(transcript, options) {
         nextActions,
     };
 }
-// CommonJS互換エクスポート（既存JSから使用するため）
-module.exports = {
-    setSlackClient,
-    summarizeText,
-    summarizeMeeting: exports.summarizeMeeting,
-    extractTaskFromMessage,
-    extractTasks: exports.extractTasks,
-    generateMeetingMinutes,
-    askProjectPM,
-    generateAndCommitMinutes,
-    getProjectContext,
-    getCommonGlossary,
-    mastra: index_js_1.mastra,
-};
+// ESMエクスポート（named exportsで提供済み）
 //# sourceMappingURL=bridge.js.map

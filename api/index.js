@@ -1767,9 +1767,9 @@ app.event('app_mention', async ({ event, client, logger }) => {
       try {
         let response = null;
 
-        // Mastraブリッジを試す
+        // Mastraブリッジを試す（ESM dynamic import）
         try {
-          const mastraBridge = require('./dist/mastra/bridge.js');
+          const mastraBridge = await import('./dist/mastra/bridge.js');
           logger.info('Using Mastra bridge for question');
           response = await mastraBridge.askProjectPM(cleanedText, {
             channelName,
@@ -1778,17 +1778,43 @@ app.event('app_mention', async ({ event, client, logger }) => {
           });
         } catch (e) {
           // Mastra未ロード時は既存のBedrockを使用
-          logger.info('Mastra not available, using Bedrock directly');
+          logger.error('Mastra bridge load failed:', e.message);
+          logger.error('Stack:', e.stack);
+          logger.info('Falling back to Bedrock directly');
           const { getProjectContext } = require('./llm-integration');
           const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 
-          // チャンネルからプロジェクトを推定
+          // チャンネル名または質問文からプロジェクトを推定
           let projectId = 'general';
+          const textLower = cleanedText.toLowerCase();
+
+          // 1. チャンネル名からプロジェクト検出
           if (channelName.includes('salestailor')) projectId = 'salestailor';
           else if (channelName.includes('zeims')) projectId = 'zeims';
           else if (channelName.includes('techknight')) projectId = 'techknight';
           else if (channelName.includes('dialogai')) projectId = 'dialogai';
           else if (channelName.includes('aitle')) projectId = 'aitle';
+
+          // 2. チャンネルで特定できない場合は質問文から検出
+          if (projectId === 'general') {
+            const projectKeywords = {
+              'zeims': ['zeims', 'ゼイムス', '採用管理'],
+              'salestailor': ['salestailor', 'セールステイラー', 'セールスレター'],
+              'techknight': ['techknight', 'テックナイト', 'tech knight'],
+              'aitle': ['aitle', 'アイトル'],
+              'dialogai': ['dialogai', 'ダイアログ'],
+              'senrigan': ['senrigan', 'センリガン', '千里眼'],
+              'baao': ['baao', 'バーオ'],
+            };
+
+            for (const [pid, keywords] of Object.entries(projectKeywords)) {
+              if (keywords.some(kw => textLower.includes(kw.toLowerCase()))) {
+                projectId = pid;
+                logger.info(`Detected project "${pid}" from question keywords`);
+                break;
+              }
+            }
+          }
 
           const projectContext = await getProjectContext(projectId);
           const contextSection = projectContext
@@ -1797,6 +1823,13 @@ app.event('app_mention', async ({ event, client, logger }) => {
 
           const prompt = `${contextSection}
 あなたは${projectId}プロジェクトのAIアシスタントです。以下の質問に簡潔に回答してください。
+
+## 出力フォーマット（Slack mrkdwn）
+Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
+- 太字: *テキスト*（アスタリスク1つ）
+- 箇条書き: • または - で開始（番号リストは使わない）
+- 見出し: *見出し* + 改行（# は使わない）
+禁止: **太字**, # 見出し, 番号リスト(1. 2. 3.)
 
 質問者: ${senderName}
 質問: ${cleanedText}`;

@@ -8,6 +8,36 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 const BEDROCK_REGION = 'us-east-1';
 const BRAINBASE_CONTEXT_BUCKET = 'brainbase-context-593793022993';
 
+// プロジェクト名のキーワードマッピング（質問文から検出用）
+const PROJECT_KEYWORDS: Record<string, string[]> = {
+  'zeims': ['zeims', 'ゼイムス', '採用管理', '採用'],
+  'salestailor': ['salestailor', 'セールステイラー', 'セールスレター'],
+  'techknight': ['techknight', 'テックナイト', 'tech knight', 'エンジニアリング'],
+  'aitle': ['aitle', 'アイトル', 'タイトル生成'],
+  'dialogai': ['dialogai', 'ダイアログ', '会議ファシリ'],
+  'senrigan': ['senrigan', 'センリガン', '千里眼'],
+  'baao': ['baao', 'バーオ'],
+  'brainbase': ['brainbase', 'ブレインベース'],
+};
+
+/**
+ * 質問文からプロジェクトIDを検出する
+ */
+function detectProjectFromQuestion(question: string): string | null {
+  const lowerQuestion = question.toLowerCase();
+
+  for (const [projectId, keywords] of Object.entries(PROJECT_KEYWORDS)) {
+    for (const keyword of keywords) {
+      if (lowerQuestion.includes(keyword.toLowerCase())) {
+        console.log(`Detected project "${projectId}" from keyword "${keyword}"`);
+        return projectId;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Slackクライアントを設定する
  * 既存のindex.jsから呼び出して、Slackツールが使えるようにする
@@ -119,7 +149,7 @@ ${text.substring(0, 180000)}
 `;
 
   try {
-    const result = await agent.generate(prompt);
+    const result = await agent.generateLegacy(prompt);
     return result.text;
   } catch (error) {
     console.error('Mastra summarizeText error:', error);
@@ -187,7 +217,7 @@ JSONのみを出力してください。
 `;
 
   try {
-    const result = await agent.generate(prompt);
+    const result = await agent.generateLegacy(prompt);
     const rawResponse = result.text;
 
     // Parse JSON from response
@@ -232,27 +262,50 @@ export async function askProjectPM(
   let agent: any = null;
   let projectId: string | undefined = options.projectId;
 
+  // 1. 明示的なプロジェクトIDがあればそれを使用
   if (projectId) {
     const pmId = `${projectId}PM`;
     agent = getAgent(pmId);
-  } else if (options.channelName) {
+  }
+
+  // 2. チャンネル名からプロジェクトを推定
+  if (!agent && options.channelName) {
     agent = getProjectPMByChannel(options.channelName);
-    // チャンネル名からプロジェクトIDを推定
     const { getProjectByChannel } = await import('./config/projects.js');
     const project = getProjectByChannel(options.channelName);
     projectId = project?.id;
   }
 
-  if (!agent) {
-    return 'このチャンネルに対応するAI PMが見つかりません。';
+  // 3. 質問文からプロジェクトを検出（フォールバック）
+  if (!projectId) {
+    const detectedProject = detectProjectFromQuestion(question);
+    if (detectedProject) {
+      projectId = detectedProject;
+      const pmId = `${detectedProject}PM`;
+      agent = getAgent(pmId);
+      console.log(`Using detected project "${detectedProject}" from question`);
+    }
   }
 
-  // brainbaseコンテキストを取得（デフォルトで有効）
+  // 4. どれにも該当しない場合は汎用エージェントを使用
+  if (!agent) {
+    // meetingAgentを汎用的に使用（将来的にはgeneralPMを作成）
+    agent = allAgents.meetingAgent;
+    console.log('No specific project detected, using general agent');
+  }
+
+  if (!agent) {
+    return 'エージェントの初期化に失敗しました。';
+  }
+
+  // brainbaseコンテキストを取得
   let contextSection = '';
-  if (options.includeContext !== false && projectId) {
-    const projectContext = await getProjectContext(projectId);
-    if (projectContext) {
-      contextSection = `
+  if (options.includeContext !== false) {
+    if (projectId) {
+      // 特定プロジェクトのコンテキスト
+      const projectContext = await getProjectContext(projectId);
+      if (projectContext) {
+        contextSection = `
 # プロジェクトコンテキスト（brainbase）
 以下は${projectId}プロジェクトの最新情報です。回答時に参照してください。
 
@@ -261,6 +314,19 @@ ${projectContext.substring(0, 30000)}
 ---
 
 `;
+      }
+    } else {
+      // プロジェクト不明の場合は共通用語集のみ
+      const glossary = await getCommonGlossary();
+      if (glossary) {
+        contextSection = `
+# 共通コンテキスト（brainbase）
+${glossary}
+
+---
+
+`;
+      }
     }
   }
 
@@ -270,7 +336,7 @@ ${projectContext.substring(0, 30000)}
   const prompt = `${contextSection}${senderInfo}${question}`;
 
   try {
-    const result = await agent.generate(prompt);
+    const result = await agent.generateLegacy(prompt);
     return result.text;
   } catch (error) {
     console.error('askProjectPM error:', error);
@@ -358,7 +424,7 @@ ${text.substring(0, 180000)}
 `;
 
   try {
-    const result = await agent.generate(prompt);
+    const result = await agent.generateLegacy(prompt);
     const rawResponse = result.text;
 
     // Parse JSON response
@@ -419,17 +485,4 @@ export async function generateAndCommitMinutes(
   };
 }
 
-// CommonJS互換エクスポート（既存JSから使用するため）
-module.exports = {
-  setSlackClient,
-  summarizeText,
-  summarizeMeeting,
-  extractTaskFromMessage,
-  extractTasks,
-  generateMeetingMinutes,
-  askProjectPM,
-  generateAndCommitMinutes,
-  getProjectContext,
-  getCommonGlossary,
-  mastra,
-};
+// ESMエクスポート（named exportsで提供済み）

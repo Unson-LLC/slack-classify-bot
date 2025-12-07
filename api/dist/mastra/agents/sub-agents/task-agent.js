@@ -1,11 +1,8 @@
-"use strict";
 // mastra/agents/sub-agents/task-agent.ts
 // タスク管理エージェント - タスク抽出・管理
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createTaskAgent = void 0;
-const agent_1 = require("@mastra/core/agent");
-const llm_provider_js_1 = require("../../config/llm-provider.js");
-const github_js_1 = require("../../tools/github.js");
+import { Agent } from '@mastra/core/agent';
+import { defaultModel } from '../../config/llm-provider.js';
+import { githubAppendTaskTool } from '../../tools/github.js';
 const instructions = `あなたはタスク管理アシスタントです。会話やメッセージからタスクを抽出し、適切に管理します。
 
 ## 役割
@@ -42,13 +39,13 @@ const instructions = `あなたはタスク管理アシスタントです。会�
 - 担当者名はbrainbaseの表記に従う
 - 1メッセージから複数タスクを抽出することもある
 - 雑談や情報共有はタスクとして抽出しない`;
-const createTaskAgent = () => new agent_1.Agent({
+export const createTaskAgent = () => new Agent({
+    id: 'task-agent',
     name: 'Task Agent',
     instructions,
-    model: llm_provider_js_1.defaultModel,
+    model: defaultModel,
     tools: {
-        github_append_task: github_js_1.githubAppendTaskTool,
+        github_append_task: githubAppendTaskTool,
     },
 });
-exports.createTaskAgent = createTaskAgent;
 //# sourceMappingURL=task-agent.js.map

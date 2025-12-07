@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "Node16",
+    "module": "ESNext",
     "lib": ["ES2022"],
     "outDir": "./dist/mastra",
     "rootDir": "./mastra",
@@ -12,7 +12,7 @@
     "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": true,
-    "moduleResolution": "Node16",
+    "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "noEmitOnError": false,
     "noImplicitAny": false

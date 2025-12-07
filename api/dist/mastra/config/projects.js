@@ -1,13 +1,8 @@
-"use strict";
 // mastra/config/projects.ts
 // プロジェクト設定 - AI PM生成用
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.projectConfigs = void 0;
-exports.getProjectByChannel = getProjectByChannel;
-exports.getProjectById = getProjectById;
 // プロジェクト設定一覧
 // 将来的にはbrainbase MCPから動的取得も検討
-exports.projectConfigs = [
+export const projectConfigs = [
     {
         id: 'salestailor',
         name: 'SalesTailor',
@@ -50,11 +45,11 @@ exports.projectConfigs = [
     },
 ];
 // チャンネル名からプロジェクトを逆引き
-function getProjectByChannel(channelName) {
-    return exports.projectConfigs.find(p => p.slackChannels.some(ch => channelName.includes(ch) || ch.includes(channelName)));
+export function getProjectByChannel(channelName) {
+    return projectConfigs.find(p => p.slackChannels.some(ch => channelName.includes(ch) || ch.includes(channelName)));
 }
 // プロジェクトIDからプロジェクトを取得
-function getProjectById(projectId) {
-    return exports.projectConfigs.find(p => p.id === projectId);
+export function getProjectById(projectId) {
+    return projectConfigs.find(p => p.id === projectId);
 }
 //# sourceMappingURL=projects.js.map

@@ -9,14 +9,15 @@ export type ProviderType = 'bedrock' | 'anthropic' | 'cloudflare';
 export function getLLMModel(provider: ProviderType = 'bedrock') {
   switch (provider) {
     case 'bedrock':
-      return bedrock('anthropic.claude-sonnet-4-20250514-v1:0');
+      // Claude 4.5 Sonnet (US inference profile)
+      return bedrock('us.anthropic.claude-sonnet-4-5-20250929-v1:0');
     case 'anthropic':
       return anthropic('claude-sonnet-4-20250514');
     case 'cloudflare':
       // Cloudflare Workers AI対応時に追加
       throw new Error('Cloudflare provider not yet implemented');
     default:
-      return bedrock('anthropic.claude-sonnet-4-20250514-v1:0');
+      return bedrock('us.anthropic.claude-3-5-sonnet-20241022-v2:0');
   }
 }
 

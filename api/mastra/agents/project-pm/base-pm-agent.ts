@@ -61,6 +61,7 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 - 判断が難しい場合は人間にエスカレーション`;
 
   return new Agent({
+    id: `${config.id}-pm`,
     name: `${config.name} AI PM`,
     instructions,
     model: defaultModel,

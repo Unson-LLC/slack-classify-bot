@@ -44,6 +44,7 @@ const instructions = `あなたはタスク管理アシスタントです。会�
 
 export const createTaskAgent = () =>
   new Agent({
+    id: 'task-agent',
     name: 'Task Agent',
     instructions,
     model: defaultModel,

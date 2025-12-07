@@ -34,6 +34,7 @@ const instructions = `あなたは会議アシスタントです。文字起こ�
 
 export const createMeetingAgent = () =>
   new Agent({
+    id: 'meeting-agent',
     name: 'Meeting Agent',
     instructions,
     model: defaultModel,

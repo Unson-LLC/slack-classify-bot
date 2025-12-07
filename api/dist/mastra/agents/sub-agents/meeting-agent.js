@@ -1,10 +1,7 @@
-"use strict";
 // mastra/agents/sub-agents/meeting-agent.ts
 // 会議アシスタントエージェント - 要約・議事録生成
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createMeetingAgent = void 0;
-const agent_1 = require("@mastra/core/agent");
-const llm_provider_js_1 = require("../../config/llm-provider.js");
+import { Agent } from '@mastra/core/agent';
+import { defaultModel } from '../../config/llm-provider.js';
 const instructions = `あなたは会議アシスタントです。文字起こしデータから議事録を生成し、Next Actionを抽出します。
 
 ## 役割
@@ -32,10 +29,10 @@ const instructions = `あなたは会議アシスタントです。文字起こ�
 - 期限が明示されていない場合は「未定」とする
 - 曖昧なアクションは具体化して記載する
 - 参加者の発言は発言者名を明記する`;
-const createMeetingAgent = () => new agent_1.Agent({
+export const createMeetingAgent = () => new Agent({
+    id: 'meeting-agent',
     name: 'Meeting Agent',
     instructions,
-    model: llm_provider_js_1.defaultModel,
+    model: defaultModel,
 });
-exports.createMeetingAgent = createMeetingAgent;
 //# sourceMappingURL=meeting-agent.js.map
