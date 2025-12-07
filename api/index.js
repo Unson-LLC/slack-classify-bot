@@ -1751,6 +1751,34 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
         logger.warn('Failed to get user name:', e.message);
       }
 
+      // スレッドコンテキストを取得（スレッド内での質問の場合）
+      let threadContext = '';
+      const threadTs = event.thread_ts;
+      if (threadTs) {
+        try {
+          const { getThreadContext } = require('./thread-context');
+          const { getSlackIdToBrainbaseName } = require('./slack-name-resolver');
+          const slackIdToName = await getSlackIdToBrainbaseName();
+
+          threadContext = await getThreadContext({
+            client,
+            channel: event.channel,
+            threadTs,
+            currentTs: event.ts,
+            slackIdToName
+          });
+
+          if (threadContext) {
+            logger.info(`Thread context added: ${threadContext.length} chars`);
+          }
+        } catch (e) {
+          logger.warn('Failed to get thread context:', e.message);
+        }
+      }
+
+      // 質問にスレッドコンテキストを追加
+      const questionWithContext = cleanedText + threadContext;
+
       // AI PMに質問（Mastraまたは既存Bedrockを使用）
       try {
         let response = null;
@@ -1759,7 +1787,7 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
         try {
           const mastraBridge = await import('./dist/mastra/bridge.js');
           logger.info('Using Mastra bridge for question');
-          response = await mastraBridge.askProjectPM(cleanedText, {
+          response = await mastraBridge.askProjectPM(questionWithContext, {
             channelName,
             senderName,
             threadId: event.ts,
