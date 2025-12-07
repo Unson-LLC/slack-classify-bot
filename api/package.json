@@ -33,6 +33,7 @@
     "@mastra/mcp": "^1.0.0-beta.5",
     "@mastra/memory": "^1.0.0-beta.4",
     "@slack/bolt": "^3.17.1",
+    "@tavily/core": "^0.5.14",
     "ai": "^4.2.6",
     "airtable": "^0.12.2",
     "aws-sdk": "^2.1692.0",

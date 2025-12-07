@@ -1719,22 +1719,9 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
     }
 
     // --- Phase 5b: 質問系メッセージの検出とAI PMへのルーティング ---
-    // 担当者メンションがなく、質問パターンにマッチする場合はAI PMモードに
-    const questionPatterns = [
-      /教えて|おしえて/,
-      /どう(なって|すれば|したら|いう)/,
-      /何(です|だ|を|が|の)/,
-      /いつ|どこ|だれ|なぜ|どうして/,
-      /わかる\?|わかりますか/,
-      /ありますか|ある\?/,
-      /できる\?|できますか/,
-      /状況|ステータス|進捗/,
-      /について$/,
-      /\?|？$/
-    ];
-
-    const isQuestion = assigneeMentions.length === 0 &&
-      questionPatterns.some(pattern => pattern.test(cleanedText));
+    // ルール: 担当者メンションがない場合は全てAI PM（質問モード）へルーティング
+    // タスク作成は @mana + @担当者 が必要
+    const isQuestion = assigneeMentions.length === 0;
 
     if (isQuestion) {
       logger.info('Question detected, routing to Project AI PM');

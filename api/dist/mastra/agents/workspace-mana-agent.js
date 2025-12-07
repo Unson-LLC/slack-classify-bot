@@ -5,8 +5,9 @@
 // チャンネルからプロジェクトを判定し、スコープ内のコンテキストのみアクセス可能
 import { Agent } from '@mastra/core/agent';
 import { defaultModel } from '../config/llm-provider.js';
-import { githubAppendTaskTool, githubCommitMinutesTool } from '../tools/github.js';
+import { githubCommitMinutesTool } from '../tools/github.js';
 import { slackPostMessageTool, slackAddReactionTool } from '../tools/slack.js';
+import { webSearchTool, webExtractTool } from '../tools/tavily.js';
 /**
  * ワークスペース単位のManaエージェントを生成する
  */
@@ -56,10 +57,26 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 - # ## などのMarkdown見出しは使わない
 - 番号付きリスト（1. 2. 3.）は使わない
 
-## ツール使用
-- タスク追加時は github_append_task を使用
+## ツール使用（重要：正しいツールを選択すること）
+
+### 質問への回答 → web_search を使用
+以下のような**質問・調査依頼**には web_search で検索して回答：
+- 天気、ニュース、最新情報の質問（「今日の天気は？」「○○のニュースは？」）
+- 企業・人物・技術の調査（「○○社について教えて」）
+- 一般的な知識の質問
+
+### タスク作成 → 使用禁止
+**重要**: タスク作成（github_append_task）はこのエージェントでは使用しないこと！
+タスク作成は別のシステム（@mana + @担当者 のメンションで発動）が処理する。
+あなたが受け取るメッセージは「質問」であり、タスク依頼ではない。
+
+「〜は？」「〜を教えて」「〜について調べて」→ 質問として回答
+「〜をお願い」「タスク追加して」→ 「タスクを作成するには @mana @担当者 と一緒にメンションしてください」と案内
+
+### その他ツール
 - 議事録コミット時は github_commit_minutes を使用
 - Slack通知時は slack_post_message を使用
+- 検索結果のURLの詳細を見たい時は web_extract を使用
 
 ## 注意事項
 - スコープ外のプロジェクト情報には関与しない
@@ -70,10 +87,12 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
         instructions,
         model: defaultModel,
         tools: {
-            github_append_task: githubAppendTaskTool,
+            // github_append_task は別システム（Task Intake）が処理するため除外
             github_commit_minutes: githubCommitMinutesTool,
             slack_post_message: slackPostMessageTool,
             slack_add_reaction: slackAddReactionTool,
+            web_search: webSearchTool,
+            web_extract: webExtractTool,
         },
     });
 }
