@@ -1657,8 +1657,9 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
 // @mana へのメンションに応答
 // - 質問系: Project AI PMに転送（Phase 5b）
 // - タスク系: タスク登録（既存）
-app.event('app_mention', async ({ event, client, logger }) => {
+app.event('app_mention', async ({ event, client, logger, context }) => {
   logger.info('=== APP_MENTION EVENT RECEIVED ===');
+  logger.info(`Team: ${context.teamId || event.team}`);
   logger.info(`Channel: ${event.channel}`);
   logger.info(`User: ${event.user}`);
   logger.info(`Text: ${event.text}`);
@@ -1774,7 +1775,8 @@ app.event('app_mention', async ({ event, client, logger }) => {
           response = await mastraBridge.askProjectPM(cleanedText, {
             channelName,
             senderName,
-            threadId: event.ts
+            threadId: event.ts,
+            teamId: context.teamId || event.team
           });
         } catch (e) {
           // Mastra未ロード時は既存のBedrockを使用

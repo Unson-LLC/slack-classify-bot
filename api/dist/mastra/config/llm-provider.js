@@ -5,8 +5,8 @@ import { anthropic } from '@ai-sdk/anthropic';
 export function getLLMModel(provider = 'bedrock') {
     switch (provider) {
         case 'bedrock':
-            // Claude 3.5 Sonnet v2 (US inference profile) - Claude 4系はMastra互換性問題あり
-            return bedrock('us.anthropic.claude-3-5-sonnet-20241022-v2:0');
+            // Claude 4.5 Sonnet (US inference profile)
+            return bedrock('us.anthropic.claude-sonnet-4-5-20250929-v1:0');
         case 'anthropic':
             return anthropic('claude-sonnet-4-20250514');
         case 'cloudflare':

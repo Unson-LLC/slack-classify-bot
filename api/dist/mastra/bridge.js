@@ -1,7 +1,8 @@
 // mastra/bridge.ts
 // 既存JavaScriptコードからMastraエージェントを呼び出すブリッジ
 // llm-integration.jsとの互換性を提供
-import { getProjectPMByChannel, getAgent, allAgents } from './index.js';
+import { getManaByTeamId, getAgent, allAgents, canAccessProject } from './index.js';
+import { getDefaultWorkspace } from './config/workspaces.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 const BEDROCK_REGION = 'us-east-1';
 const BRAINBASE_CONTEXT_BUCKET = 'brainbase-context-593793022993';
@@ -13,8 +14,9 @@ const PROJECT_KEYWORDS = {
     'aitle': ['aitle', 'アイトル', 'タイトル生成'],
     'dialogai': ['dialogai', 'ダイアログ', '会議ファシリ'],
     'senrigan': ['senrigan', 'センリガン', '千里眼'],
-    'baao': ['baao', 'バーオ'],
+    'baao': ['baao', 'バーオ', 'AI道場'],
     'brainbase': ['brainbase', 'ブレインベース'],
+    'ncom': ['ncom', 'ドコモ', 'docomo', 'catalyst'],
 };
 /**
  * 質問文からプロジェクトIDを検出する
@@ -39,11 +41,20 @@ export function setSlackClient(client) {
     global.__manaSlackClient = client;
 }
 /**
- * S3からプロジェクトコンテキストを取得（llm-integration.js互換）
+ * S3からプロジェクトコンテキストを取得
+ * ワークスペースのスコープをチェックしてからアクセス
  */
-export async function getProjectContext(projectName) {
+export async function getProjectContext(projectName, workspace) {
     if (!projectName)
         return null;
+    // スコープチェック（ワークスペースが指定されている場合）
+    if (workspace) {
+        const projectId = `proj_${projectName}`;
+        if (!canAccessProject(workspace, projectId)) {
+            console.warn(`[越権] Workspace ${workspace.id} attempted to access project ${projectName}`);
+            return null;
+        }
+    }
     const s3Client = new S3Client({ region: BEDROCK_REGION });
     try {
         const command = new GetObjectCommand({
@@ -132,7 +143,7 @@ ${glossarySection}
 ${text.substring(0, 180000)}
 `;
     try {
-        const result = await agent.generateLegacy(prompt);
+        const result = await agent.generate(prompt);
         return result.text;
     }
     catch (error) {
@@ -179,6 +190,9 @@ JSONのみを出力してください。
 - zeims: Zeims関連
 - dialogai: DialogAI関連
 - aitle: Aitle関連
+- baao: BAAO関連
+- senrigan: Senrigan関連
+- ncom: NTTCom関連
 - general: その他/不明
 
 # 重要ルール
@@ -186,7 +200,7 @@ JSONのみを出力してください。
 - 内容が短くても必ずJSON形式で出力してください
 `;
     try {
-        const result = await agent.generateLegacy(prompt);
+        const result = await agent.generate(prompt);
         const rawResponse = result.text;
         // Parse JSON from response
         const jsonMatch = rawResponse.match(/\`\`\`json\s*([\s\S]*?)\s*\`\`\`/);
@@ -213,49 +227,44 @@ JSONのみを出力してください。
 // 後方互換性のためのエイリアス
 export const extractTasks = extractTaskFromMessage;
 /**
- * プロジェクトAI PMに問い合わせる
- * チャンネル名またはプロジェクトIDでAI PMを特定し、brainbaseコンテキストを付与
+ * ワークスペースのManaエージェントに問い合わせる
+ * Team IDからワークスペースを特定し、スコープ内のコンテキストのみアクセス
  */
-export async function askProjectPM(question, options) {
+export async function askMana(question, options) {
+    // 1. Team IDからワークスペースとManaを特定
+    let workspace;
     let agent = null;
-    let projectId = options.projectId;
-    // 1. 明示的なプロジェクトIDがあればそれを使用
-    if (projectId) {
-        const pmId = `${projectId}PM`;
-        agent = getAgent(pmId);
-    }
-    // 2. チャンネル名からプロジェクトを推定
-    if (!agent && options.channelName) {
-        agent = getProjectPMByChannel(options.channelName);
-        const { getProjectByChannel } = await import('./config/projects.js');
-        const project = getProjectByChannel(options.channelName);
-        projectId = project?.id;
-    }
-    // 3. 質問文からプロジェクトを検出（フォールバック）
-    if (!projectId) {
-        const detectedProject = detectProjectFromQuestion(question);
-        if (detectedProject) {
-            projectId = detectedProject;
-            const pmId = `${detectedProject}PM`;
-            agent = getAgent(pmId);
-            console.log(`Using detected project "${detectedProject}" from question`);
+    if (options.teamId) {
+        const mana = getManaByTeamId(options.teamId);
+        if (mana) {
+            agent = mana.agent;
+            workspace = mana.workspace;
+            console.log(`[INFO] Using ${workspace.id}Mana for team ${options.teamId}`);
         }
     }
-    // 4. どれにも該当しない場合は汎用エージェントを使用
+    // 2. Team IDがない場合はデフォルト（unson）を使用
     if (!agent) {
-        // meetingAgentを汎用的に使用（将来的にはgeneralPMを作成）
-        agent = allAgents.meetingAgent;
-        console.log('No specific project detected, using general agent');
+        workspace = getDefaultWorkspace();
+        agent = getAgent(`${workspace.id}Mana`);
+        console.log(`[INFO] No team ID provided, using default workspace: ${workspace.id}`);
     }
     if (!agent) {
         return 'エージェントの初期化に失敗しました。';
     }
-    // brainbaseコンテキストを取得
+    // 3. 質問文からプロジェクトを検出
+    let projectId = detectProjectFromQuestion(question);
+    // 4. プロジェクトがスコープ内かチェック
+    if (projectId && workspace) {
+        if (!canAccessProject(workspace, `proj_${projectId}`)) {
+            console.warn(`[越権] ${workspace.id}Mana cannot access project ${projectId}`);
+            return `申し訳ありませんが、${projectId}プロジェクトの情報にはアクセス権限がありません。`;
+        }
+    }
+    // 5. brainbaseコンテキストを取得（スコープチェック付き）
     let contextSection = '';
     if (options.includeContext !== false) {
         if (projectId) {
-            // 特定プロジェクトのコンテキスト
-            const projectContext = await getProjectContext(projectId);
+            const projectContext = await getProjectContext(projectId, workspace);
             if (projectContext) {
                 contextSection = `
 # プロジェクトコンテキスト（brainbase）
@@ -282,17 +291,55 @@ ${glossary}
             }
         }
     }
-    // 質問者情報を付与
+    // 6. 質問者情報を付与
     const senderInfo = options.senderName ? `（質問者: ${options.senderName}）` : '';
-    const prompt = `${contextSection}${senderInfo}${question}`;
+    // 7. Slack mrkdwn形式の指示
+    const formatInstruction = `
+【出力フォーマット: Slack mrkdwn】
+必ず以下のSlack記法で回答してください：
+- 太字: *テキスト*（アスタリスク1つ）
+- 箇条書き: • または - で開始
+- 見出し: *見出し* + 改行
+
+禁止：
+- **太字**（アスタリスク2つ）は使わない
+- # ## などのMarkdown見出しは使わない
+- 番号付きリスト（1. 2. 3.）は使わない
+
+`;
+    // 8. スコープ制限の明示（重要：越権防止）
+    const accessibleProjects = workspace?.projects.map(p => p.replace('proj_', '')).join(', ') || '';
+    const scopeRestriction = workspace ? `
+【アクセス制御（最重要）】
+あなたは *${workspace.name}* ワークスペース専用のManaです。
+アクセス可能なプロジェクト: ${accessibleProjects}
+
+以下のルールを *必ず* 守ってください：
+1. 上記リストにないプロジェクト（例：${workspace.id === 'salestailor' ? 'Zeims, BAAO, DialogAI, TechKnight' : workspace.id === 'techknight' ? 'Zeims, BAAO, SalesTailor, DialogAI' : 'SalesTailor, TechKnight'}等）について質問されても、*絶対に回答しない*
+2. スコープ外のプロジェクトについて聞かれたら「${workspace.name}ワークスペースからはアクセス権限がありません」と返答
+3. たとえ一般知識として知っていても、スコープ外の情報は提供しない
+
+` : '';
+    const prompt = `${formatInstruction}${scopeRestriction}${contextSection}${senderInfo}${question}`;
     try {
-        const result = await agent.generateLegacy(prompt);
+        const result = await agent.generate(prompt);
         return result.text;
     }
     catch (error) {
-        console.error('askProjectPM error:', error);
+        console.error('askMana error:', error);
         return 'すみません、回答の生成中にエラーが発生しました。';
     }
+}
+// 後方互換性のためのエイリアス（askProjectPMを呼び出すコードのため）
+export async function askProjectPM(question, options) {
+    // teamIdがあればaskManaを使用、なければデフォルトで動作
+    return askMana(question, {
+        teamId: options.teamId,
+        channelName: options.channelName,
+        threadId: options.threadId,
+        senderName: options.senderName,
+        includeContext: options.includeContext,
+    });
 }
 /**
  * 文字起こしデータから詳細な議事録を生成する（llm-integration.js互換）
@@ -304,7 +351,7 @@ export async function generateMeetingMinutes(text, projectName = null) {
     if (!agent) {
         throw new Error('Meeting agent not found');
     }
-    // brainbaseコンテキストを取得
+    // brainbaseコンテキストを取得（スコープチェックなし、会議エージェントは共通）
     const projectContext = projectName ? await getProjectContext(projectName) : null;
     const contextSection = projectContext
         ? `
@@ -357,7 +404,7 @@ ${contextSection}
 ${text.substring(0, 180000)}
 `;
     try {
-        const result = await agent.generateLegacy(prompt);
+        const result = await agent.generate(prompt);
         const rawResponse = result.text;
         // Parse JSON response
         const jsonMatch = rawResponse.match(/\`\`\`json\s*([\s\S]*?)\s*\`\`\`/);

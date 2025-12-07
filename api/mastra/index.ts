@@ -1,25 +1,32 @@
 // mastra/index.ts
-// Mastraインスタンス - L1/L2層のエントリーポイント
+// Mastraインスタンス - ワークスペース単位のManaエージェント
 
 import { Mastra } from '@mastra/core';
-import { createProjectPMAgent } from './agents/project-pm/base-pm-agent.js';
+import { createWorkspaceManaAgent } from './agents/workspace-mana-agent.js';
 import { createMeetingAgent } from './agents/sub-agents/meeting-agent.js';
 import { createTaskAgent } from './agents/sub-agents/task-agent.js';
-import { projectConfigs, getProjectByChannel, getProjectById, type ProjectConfig } from './config/projects.js';
+import {
+  workspaceConfigs,
+  getWorkspaceByTeamId,
+  getWorkspaceById,
+  canAccessProject,
+  canAccessPath,
+  type WorkspaceConfig,
+} from './config/workspaces.js';
 
-// L2: プロジェクト単位のAI PMを動的生成
-const projectPMsArray = projectConfigs.map(config => ({
-  id: `${config.id}PM`,
-  agent: createProjectPMAgent(config),
+// ワークスペース単位のManaエージェントを生成
+const workspaceManaArray = workspaceConfigs.map(config => ({
+  id: `${config.id}Mana`,
+  agent: createWorkspaceManaAgent(config),
 }));
 
 // エージェントをオブジェクトに変換
-const projectPMs: Record<string, ReturnType<typeof createProjectPMAgent>> = {};
-for (const pm of projectPMsArray) {
-  projectPMs[pm.id] = pm.agent;
+const workspaceManas: Record<string, ReturnType<typeof createWorkspaceManaAgent>> = {};
+for (const mana of workspaceManaArray) {
+  workspaceManas[mana.id] = mana.agent;
 }
 
-// サブエージェント
+// サブエージェント（会議・タスク用、共通）
 const meetingAgent = createMeetingAgent();
 const taskAgent = createTaskAgent();
 
@@ -27,7 +34,7 @@ const taskAgent = createTaskAgent();
 const allAgents = {
   meetingAgent,
   taskAgent,
-  ...projectPMs,
+  ...workspaceManas,
 };
 
 // Mastraインスタンス
@@ -40,29 +47,46 @@ export function getAgent(agentId: string) {
   return (allAgents as Record<string, any>)[agentId];
 }
 
+// Slack Team IDからManaエージェントを取得
+export function getManaByTeamId(teamId: string) {
+  const workspace = getWorkspaceByTeamId(teamId);
+  if (!workspace) return null;
+
+  const manaId = `${workspace.id}Mana`;
+  return {
+    agent: getAgent(manaId),
+    workspace,
+  };
+}
+
+// ワークスペースIDからManaエージェントを取得
+export function getManaByWorkspaceId(workspaceId: string) {
+  const workspace = getWorkspaceById(workspaceId);
+  if (!workspace) return null;
+
+  const manaId = `${workspace.id}Mana`;
+  return {
+    agent: getAgent(manaId),
+    workspace,
+  };
+}
+
 // エクスポート
 export {
-  projectConfigs,
-  getProjectByChannel,
-  getProjectById,
-  createProjectPMAgent,
+  workspaceConfigs,
+  getWorkspaceByTeamId,
+  getWorkspaceById,
+  canAccessProject,
+  canAccessPath,
+  createWorkspaceManaAgent,
   createMeetingAgent,
   createTaskAgent,
   allAgents,
 };
 
-// プロジェクトPMの一覧を取得
-export function getProjectPMIds(): string[] {
-  return projectConfigs.map(config => `${config.id}PM`);
-}
-
-// チャンネル名から該当するAI PMを取得
-export function getProjectPMByChannel(channelName: string) {
-  const project = getProjectByChannel(channelName);
-  if (!project) return null;
-
-  const pmId = `${project.id}PM`;
-  return getAgent(pmId);
+// Manaエージェントの一覧を取得
+export function getManaIds(): string[] {
+  return workspaceConfigs.map(config => `${config.id}Mana`);
 }
 
 console.log(

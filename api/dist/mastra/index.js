@@ -1,28 +1,28 @@
 // mastra/index.ts
-// Mastraインスタンス - L1/L2層のエントリーポイント
+// Mastraインスタンス - ワークスペース単位のManaエージェント
 import { Mastra } from '@mastra/core';
-import { createProjectPMAgent } from './agents/project-pm/base-pm-agent.js';
+import { createWorkspaceManaAgent } from './agents/workspace-mana-agent.js';
 import { createMeetingAgent } from './agents/sub-agents/meeting-agent.js';
 import { createTaskAgent } from './agents/sub-agents/task-agent.js';
-import { projectConfigs, getProjectByChannel, getProjectById } from './config/projects.js';
-// L2: プロジェクト単位のAI PMを動的生成
-const projectPMsArray = projectConfigs.map(config => ({
-    id: `${config.id}PM`,
-    agent: createProjectPMAgent(config),
+import { workspaceConfigs, getWorkspaceByTeamId, getWorkspaceById, canAccessProject, canAccessPath, } from './config/workspaces.js';
+// ワークスペース単位のManaエージェントを生成
+const workspaceManaArray = workspaceConfigs.map(config => ({
+    id: `${config.id}Mana`,
+    agent: createWorkspaceManaAgent(config),
 }));
 // エージェントをオブジェクトに変換
-const projectPMs = {};
-for (const pm of projectPMsArray) {
-    projectPMs[pm.id] = pm.agent;
+const workspaceManas = {};
+for (const mana of workspaceManaArray) {
+    workspaceManas[mana.id] = mana.agent;
 }
-// サブエージェント
+// サブエージェント（会議・タスク用、共通）
 const meetingAgent = createMeetingAgent();
 const taskAgent = createTaskAgent();
 // 全エージェントを結合
 const allAgents = {
     meetingAgent,
     taskAgent,
-    ...projectPMs,
+    ...workspaceManas,
 };
 // Mastraインスタンス
 export const mastra = new Mastra({
@@ -32,19 +32,33 @@ export const mastra = new Mastra({
 export function getAgent(agentId) {
     return allAgents[agentId];
 }
-// エクスポート
-export { projectConfigs, getProjectByChannel, getProjectById, createProjectPMAgent, createMeetingAgent, createTaskAgent, allAgents, };
-// プロジェクトPMの一覧を取得
-export function getProjectPMIds() {
-    return projectConfigs.map(config => `${config.id}PM`);
-}
-// チャンネル名から該当するAI PMを取得
-export function getProjectPMByChannel(channelName) {
-    const project = getProjectByChannel(channelName);
-    if (!project)
+// Slack Team IDからManaエージェントを取得
+export function getManaByTeamId(teamId) {
+    const workspace = getWorkspaceByTeamId(teamId);
+    if (!workspace)
         return null;
-    const pmId = `${project.id}PM`;
-    return getAgent(pmId);
+    const manaId = `${workspace.id}Mana`;
+    return {
+        agent: getAgent(manaId),
+        workspace,
+    };
+}
+// ワークスペースIDからManaエージェントを取得
+export function getManaByWorkspaceId(workspaceId) {
+    const workspace = getWorkspaceById(workspaceId);
+    if (!workspace)
+        return null;
+    const manaId = `${workspace.id}Mana`;
+    return {
+        agent: getAgent(manaId),
+        workspace,
+    };
+}
+// エクスポート
+export { workspaceConfigs, getWorkspaceByTeamId, getWorkspaceById, canAccessProject, canAccessPath, createWorkspaceManaAgent, createMeetingAgent, createTaskAgent, allAgents, };
+// Manaエージェントの一覧を取得
+export function getManaIds() {
+    return workspaceConfigs.map(config => `${config.id}Mana`);
 }
 console.log(`Mastra initialized. Registered agents: ${Object.keys(allAgents).join(', ')}`);
 //# sourceMappingURL=index.js.map
