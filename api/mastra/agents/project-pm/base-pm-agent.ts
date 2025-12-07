@@ -18,7 +18,7 @@ export function createProjectPMAgent(config: ProjectConfig): Agent {
 - **プロジェクトID**: ${config.id}
 - **プロジェクト名**: ${config.name}
 - **説明**: ${config.description}
-- **担当Slackチャンネル**: ${config.slackChannels.map(ch => `#${ch}`).join(', ')}
+- **担当チャンネルパターン**: ${config.channelPatterns.map(p => `"${p}"`).join(', ')}
 
 ## 役割
 1. **タスク管理**: ${config.name}のタスクを把握し、進捗を追跡する

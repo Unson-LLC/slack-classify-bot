@@ -4,6 +4,7 @@
 
 import { getManaByTeamId, getAgent, allAgents, canAccessProject } from './index.js';
 import { getWorkspaceByTeamId, getDefaultWorkspace, type WorkspaceConfig } from './config/workspaces.js';
+import { getProjectByChannel, getAirtableConfigByChannel, type AirtableConfig } from './config/projects.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 
 const BEDROCK_REGION = 'us-east-1';
@@ -375,7 +376,27 @@ ${glossary}
 
 ` : '';
 
-  const prompt = `${formatInstruction}${scopeRestriction}${contextSection}${senderInfo}${question}`;
+  // 9. Airtableコンテキスト（チャンネル名からプロジェクトのBase IDを特定）
+  let airtableContext = '';
+  if (options.channelName) {
+    const airtableConfig = getAirtableConfigByChannel(options.channelName);
+    if (airtableConfig) {
+      const detectedProject = getProjectByChannel(options.channelName);
+      airtableContext = `
+【Airtable設定（このチャンネルのプロジェクト用）】
+プロジェクト: ${detectedProject?.name || 'unknown'}
+- Base ID: ${airtableConfig.baseId}
+- 機能要求テーブル: ${airtableConfig.productFeaturesTableId}
+- 要件テーブル: ${airtableConfig.requirementsTableId}
+
+Airtableツール使用時は必ずこのBase IDを使用してください。ユーザーにBase IDを聞く必要はありません。
+
+`;
+      console.log(`[INFO] Airtable context injected for ${detectedProject?.name}: baseId=${airtableConfig.baseId}`);
+    }
+  }
+
+  const prompt = `${formatInstruction}${scopeRestriction}${airtableContext}${contextSection}${senderInfo}${question}`;
 
   try {
     const result = await agent.generate(prompt);

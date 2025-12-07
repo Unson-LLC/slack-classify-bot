@@ -10,6 +10,15 @@ import { WorkspaceConfig } from '../config/workspaces.js';
 import { githubAppendTaskTool, githubCommitMinutesTool } from '../tools/github.js';
 import { slackPostMessageTool, slackAddReactionTool } from '../tools/slack.js';
 import { webSearchTool, webExtractTool } from '../tools/tavily.js';
+import {
+  airtableListBasesTool,
+  airtableListTablesTool,
+  airtableListRecordsTool,
+  airtableSearchRecordsTool,
+  airtableGetRecordTool,
+  airtableCreateRecordTool,
+  airtableUpdateRecordTool,
+} from '../tools/airtable.js';
 
 /**
  * ワークスペース単位のManaエージェントを生成する
@@ -77,6 +86,25 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 「〜は？」「〜を教えて」「〜について調べて」→ 質問として回答
 「〜をお願い」「タスク追加して」→ 「タスクを作成するには @mana @担当者 と一緒にメンションしてください」と案内
 
+### Airtableデータ操作 → airtable_* を使用
+プロダクト要求・要件の管理にAirtableを使用。
+
+**Base IDの取得方法**:
+1. プロンプト内に「【Airtable設定】」セクションがあればそのBase IDを使用
+2. Base IDが不明な場合は airtable_list_bases でBase一覧を取得
+3. プロジェクト名からBaseを特定してBase IDを取得
+
+テーブル構成:
+- *機能要求テーブル*: ビジネス側が作成するプロダクト要求
+- *要件テーブル*: 開発側が機能要求を分解した技術要件
+
+利用可能な操作：
+- Base一覧: airtable_list_bases（Base ID不明時に使用）
+- テーブル一覧: airtable_list_tables
+- レコード取得: airtable_list_records, airtable_get_record
+- レコード検索: airtable_search_records
+- レコード作成/更新: airtable_create_record, airtable_update_record
+
 ### その他ツール
 - 議事録コミット時は github_commit_minutes を使用
 - Slack通知時は slack_post_message を使用
@@ -98,6 +126,14 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
       slack_add_reaction: slackAddReactionTool,
       web_search: webSearchTool,
       web_extract: webExtractTool,
+      // Airtable MCPツール
+      airtable_list_bases: airtableListBasesTool,
+      airtable_list_tables: airtableListTablesTool,
+      airtable_list_records: airtableListRecordsTool,
+      airtable_search_records: airtableSearchRecordsTool,
+      airtable_get_record: airtableGetRecordTool,
+      airtable_create_record: airtableCreateRecordTool,
+      airtable_update_record: airtableUpdateRecordTool,
     },
   });
 }
