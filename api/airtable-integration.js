@@ -67,9 +67,10 @@ class AirtableIntegration {
    * Get Slack channels for a project (now from DynamoDB)
    * @param {string} projectId - Project ID
    * @param {string} projectName - Project name (optional, for fallback with old Airtable IDs)
-   * @returns {Promise<Array>} - Array of channel IDs (for backward compatibility)
+   * @param {boolean} includeNames - If true, return objects with id and name (default: false for backward compatibility)
+   * @returns {Promise<Array>} - Array of channel IDs or objects with id/name
    */
-  async getSlackChannelsForProject(projectId, projectName = null) {
+  async getSlackChannelsForProject(projectId, projectName = null, includeNames = false) {
     try {
       // Try to get project by ID first
       let project = await this.projectRepository.getProjectById(projectId);
@@ -86,11 +87,40 @@ class AirtableIntegration {
       }
 
       const channels = project.slack_channels || [];
+      const crosspostChannels = project.crosspost_channels || [];
 
-      // For backward compatibility, return array of channel_id strings
-      // (index.js will fetch channel names via Slack API)
-      if (Array.isArray(channels)) {
-        return channels.map(ch => typeof ch === 'string' ? ch : ch.channel_id);
+      // Combine regular channels and crosspost channels, deduplicating by channel_id
+      const seenIds = new Set();
+      const allChannels = [];
+      for (const ch of [...channels, ...crosspostChannels]) {
+        const id = typeof ch === 'string' ? ch : ch.channel_id;
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          allChannels.push(ch);
+        }
+      }
+
+      if (Array.isArray(allChannels)) {
+        if (includeNames) {
+          // Return objects with id and name from DynamoDB (no Slack API call needed)
+          // Create a Set of crosspost channel IDs for efficient lookup
+          const crosspostIds = new Set(
+            crosspostChannels.map(c => typeof c === 'string' ? c : c.channel_id)
+          );
+          return allChannels.map(ch => {
+            if (typeof ch === 'string') {
+              return { id: ch, name: ch, isCrosspost: crosspostIds.has(ch) };
+            }
+            return {
+              id: ch.channel_id,
+              name: ch.channel_name || ch.channel_id,
+              workspace: ch.workspace,
+              isCrosspost: crosspostIds.has(ch.channel_id)
+            };
+          });
+        }
+        // For backward compatibility, return array of channel_id strings
+        return allChannels.map(ch => typeof ch === 'string' ? ch : ch.channel_id);
       }
 
       return [];
@@ -189,13 +219,15 @@ class AirtableIntegration {
             type: "button",
             text: {
               type: "plain_text",
-              text: `#${channel.name}`,
+              text: channel.workspace && channel.workspace !== 'unson' ? `#${channel.name} (${channel.workspace})` : `#${channel.name}`,
               emoji: true
             },
             value: JSON.stringify({
               projectId: projectId,
               projectName: projectName,
               channelId: channel.id,
+              channelName: channel.name,
+              workspace: channel.workspace || 'unson',
               fileId: fileId,
               fileName: fileData.fileName,
               classificationResult: fileData.classificationResult,

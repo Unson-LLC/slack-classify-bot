@@ -236,27 +236,9 @@ app.action(/select_project_.*/, async ({ ack, action, body, client, logger }) =>
     const actionData = JSON.parse(action.value);
     const { projectId, fileId, fileName, projectName, summary } = actionData;
     
-    // Get Slack channels for the selected project
-    const slackChannels = await airtableIntegration.getSlackChannelsForProject(projectId, projectName);
-    logger.info(`Found ${slackChannels.length} Slack channels for project ${projectId}:`, slackChannels);
-
-    // Get channel names for better display
-    const channelInfos = [];
-    for (const channelId of slackChannels) {
-      try {
-        const channelInfo = await client.conversations.info({ channel: channelId });
-        channelInfos.push({
-          id: channelId,
-          name: channelInfo.channel.name || channelId
-        });
-      } catch (error) {
-        logger.warn(`Failed to get channel info for ${channelId}:`, error.message);
-        channelInfos.push({
-          id: channelId,
-          name: channelId
-        });
-      }
-    }
+    // Get Slack channels for the selected project (with names from DynamoDB)
+    const channelInfos = await airtableIntegration.getSlackChannelsForProject(projectId, projectName, true);
+    logger.info(`Found ${channelInfos.length} Slack channels for project ${projectId}:`, channelInfos);
 
     // Always show channel selection UI (even with 0 channels, shows "GitHub only" button)
     const channelBlocks = airtableIntegration.createChannelSelectionBlocks(
@@ -298,15 +280,55 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
 
     // Parse action data
     const actionData = JSON.parse(action.value);
-    const { projectId, channelId, fileId, fileName, summary, projectName } = actionData;
-    
-    // Get channel name for display
-    let channelName = channelId;
-    try {
-      const channelInfo = await client.conversations.info({ channel: channelId });
-      channelName = channelInfo.channel.name || channelId;
-    } catch (error) {
-      logger.warn(`Failed to get channel name for ${channelId}:`, error.message);
+    const { projectId, channelId, fileId, fileName, summary, projectName, workspace, channelName: actionChannelName } = actionData;
+
+    // Get channel name for display (use from action data if available)
+    let channelName = actionChannelName || channelId;
+    const targetWorkspace = workspace || 'unson';
+
+    // Get workspace-specific client for crosspost
+    const { WebClient } = require('@slack/web-api');
+    let targetClient = client;
+
+    if (targetWorkspace !== 'unson') {
+      let targetToken;
+      switch (targetWorkspace) {
+        case 'techknight':
+          targetToken = process.env.SLACK_BOT_TOKEN_TECHKNIGHT;
+          break;
+        case 'salestailor':
+          targetToken = process.env.SLACK_BOT_TOKEN_SALESTAILOR;
+          break;
+        default:
+          targetToken = null;
+      }
+
+      if (!targetToken) {
+        logger.error(`No token found for workspace: ${targetWorkspace}`);
+        await client.chat.update({
+          channel: body.channel.id,
+          ts: body.message.ts,
+          text: `❌ ワークスペース *${targetWorkspace}* のトークンが設定されていません。`,
+          blocks: [{
+            type: "section",
+            text: { type: "mrkdwn", text: `❌ ワークスペース *${targetWorkspace}* のトークンが設定されていません。環境変数を確認してください。` }
+          }]
+        });
+        return;
+      }
+
+      targetClient = new WebClient(targetToken);
+      logger.info(`Using ${targetWorkspace} token for crosspost to #${channelName}`);
+    }
+
+    // If no channel name from action, try to get from API (only works for same workspace)
+    if (!actionChannelName && targetWorkspace === 'unson') {
+      try {
+        const channelInfo = await client.conversations.info({ channel: channelId });
+        channelName = channelInfo.channel.name || channelId;
+      } catch (error) {
+        logger.warn(`Failed to get channel name for ${channelId}:`, error.message);
+      }
     }
     
     // Immediately show processing message with cancel button
@@ -517,8 +539,9 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
     });
     
     // Post meeting minutes to selected channel (summary first, then detailed minutes in thread)
+    // Use targetClient for crosspost to different workspace
     const postResult = await airtableIntegration.postMinutesToChannel(
-      client,
+      targetClient,
       channelId,
       meetingMinutes,
       fileName,
@@ -1574,11 +1597,11 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
     const actionData = JSON.parse(action.value);
     const { projectId, projectName, fileId, fileName, classificationResult, summary, sourceChannelId } = actionData;
 
-    // Get Slack channels for the project
-    const slackChannels = await airtableIntegration.getSlackChannelsForProject(projectId, projectName);
-    logger.info(`Found ${slackChannels.length} Slack channels for project ${projectId}`);
+    // Get Slack channels for the project (with names from DynamoDB, no Slack API calls needed)
+    const channelInfos = await airtableIntegration.getSlackChannelsForProject(projectId, projectName, true);
+    logger.info(`Found ${channelInfos.length} Slack channels for project ${projectId}`);
 
-    if (slackChannels.length === 0) {
+    if (channelInfos.length === 0) {
       await client.chat.update({
         channel: body.channel.id,
         ts: body.message.ts,
@@ -1594,24 +1617,6 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
         text: 'チャンネルが設定されていません'
       });
       return;
-    }
-
-    // Get channel names for better display
-    const channelInfos = [];
-    for (const channelId of slackChannels) {
-      try {
-        const channelInfo = await client.conversations.info({ channel: channelId });
-        channelInfos.push({
-          id: channelId,
-          name: channelInfo.channel.name || channelId
-        });
-      } catch (error) {
-        logger.warn(`Failed to get channel info for ${channelId}:`, error.message);
-        channelInfos.push({
-          id: channelId,
-          name: channelId
-        });
-      }
     }
 
     // Show channel selection UI
