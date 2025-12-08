@@ -10,6 +10,7 @@ const { HybridDeduplicationService } = require('./dynamodb-deduplication');
 const SlackArchive = require('./slack-archive');
 const { generateFollowupMessage, formatMinutesForSlack } = require('./llm-integration');
 const { getInstance: getConversationMemory } = require('./conversation-memory');
+const { getProjectIdByChannel } = require('./channel-project-resolver');
 
 // Lambda client for async self-invocation
 const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -2073,17 +2074,12 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
       const questionWithContext = cleanedText + threadContext;
 
       // --- プロジェクトID検出（Memory用に先に実行） ---
-      let projectId = 'general';
-      const textLower = cleanedText.toLowerCase();
-
-      // 1. チャンネル名からプロジェクト検出
-      if (channelName.includes('salestailor')) projectId = 'salestailor';
-      else if (channelName.includes('zeims')) projectId = 'zeims';
-      else if (channelName.includes('techknight')) projectId = 'techknight';
-      else if (channelName.includes('dialogai')) projectId = 'dialogai';
-      else if (channelName.includes('aitle')) projectId = 'aitle';
+      // 1. S3のchannels.jsonからチャンネルID→プロジェクトIDをマッピング
+      let projectId = await getProjectIdByChannel(event.channel);
+      logger.info(`Channel ${event.channel} mapped to project: ${projectId}`);
 
       // 2. チャンネルで特定できない場合は質問文から検出
+      const textLower = cleanedText.toLowerCase();
       if (projectId === 'general') {
         const projectKeywords = {
           'zeims': ['zeims', 'ゼイムス', '採用管理'],
