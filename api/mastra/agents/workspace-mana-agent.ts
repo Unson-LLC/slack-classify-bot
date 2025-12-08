@@ -19,6 +19,14 @@ import {
   airtableCreateRecordTool,
   airtableUpdateRecordTool,
 } from '../tools/airtable.js';
+import {
+  gmailListMessagesTool,
+  gmailGetMessageTool,
+  gmailSearchMessagesTool,
+  gmailSendMessageTool,
+  gmailListLabelsTool,
+  gmailGetThreadTool,
+} from '../tools/gmail.js';
 
 /**
  * ワークスペース単位のManaエージェントを生成する
@@ -105,6 +113,23 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 - レコード検索: airtable_search_records
 - レコード作成/更新: airtable_create_record, airtable_update_record
 
+### Gmail操作 → gmail_* を使用
+メールの検索・取得・送信に使用。
+
+利用可能な操作：
+- メール一覧: gmail_list_messages（受信トレイから取得）
+- メール検索: gmail_search_messages（条件指定で検索）
+- メール詳細: gmail_get_message（本文含む詳細取得）
+- スレッド取得: gmail_get_thread（メールのやり取り全体）
+- メール送信: gmail_send_message（新規メール送信）
+- ラベル一覧: gmail_list_labels（フォルダ一覧）
+
+検索例：
+- 未読メール: query="is:unread"
+- 特定の送信者: from="example@gmail.com"
+- 添付ファイル付き: hasAttachment=true
+- 期間指定: after="2025/12/01", before="2025/12/08"
+
 ### その他ツール
 - 議事録コミット時は github_commit_minutes を使用
 - Slack通知時は slack_post_message を使用
@@ -134,6 +159,13 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
       airtable_get_record: airtableGetRecordTool,
       airtable_create_record: airtableCreateRecordTool,
       airtable_update_record: airtableUpdateRecordTool,
+      // Gmail ツール
+      gmail_list_messages: gmailListMessagesTool,
+      gmail_get_message: gmailGetMessageTool,
+      gmail_search_messages: gmailSearchMessagesTool,
+      gmail_send_message: gmailSendMessageTool,
+      gmail_list_labels: gmailListLabelsTool,
+      gmail_get_thread: gmailGetThreadTool,
     },
   });
 }

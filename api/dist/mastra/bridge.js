@@ -252,8 +252,11 @@ export async function askMana(question, options) {
     if (!agent) {
         return 'エージェントの初期化に失敗しました。';
     }
-    // 3. 質問文からプロジェクトを検出
-    let projectId = detectProjectFromQuestion(question);
+    // 3. プロジェクトIDを決定（優先順位: options.projectId > キーワード検出）
+    let projectId = options.projectId || detectProjectFromQuestion(question);
+    if (projectId && projectId !== 'general') {
+        console.log(`[INFO] Project context: ${projectId} (from ${options.projectId ? 'channel mapping' : 'keyword detection'})`);
+    }
     // 4. プロジェクトがスコープ内かチェック
     if (projectId && workspace) {
         if (!canAccessProject(workspace, `proj_${projectId}`)) {
@@ -359,6 +362,7 @@ export async function askProjectPM(question, options) {
         threadId: options.threadId,
         senderName: options.senderName,
         includeContext: options.includeContext,
+        projectId: options.projectId, // チャンネルから解決したプロジェクトID
     });
 }
 /**

@@ -2127,7 +2127,8 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
             senderName,
             threadId: event.ts,
             teamId: context.teamId || event.team,
-            conversationHistory  // 会話履歴を渡す
+            conversationHistory,  // 会話履歴を渡す
+            projectId: projectId.replace('proj_', '')  // チャンネルから解決したプロジェクトID
           });
         } catch (e) {
           // Mastra未ロード時は既存のBedrockを使用
