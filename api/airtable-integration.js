@@ -1069,6 +1069,36 @@ class AirtableIntegration {
         });
       }
 
+      // Check for crosspost channels and add crosspost button if available
+      if (isSuccess) {
+        const crosspostChannels = await this.projectRepository.getCrosspostChannelsForProject(projectId);
+        if (crosspostChannels && crosspostChannels.length > 0) {
+          logger.info(`Found ${crosspostChannels.length} crosspost channels for project ${projectId}`);
+
+          const crosspostValue = {
+            projectId: projectId,
+            projectName: projectName,
+            summary: summary ? summary.slice(0, 500) : '',
+            minutes: (minutesData?.minutes || detailedMinutes || '').slice(0, 1000),
+            fileName: fileName,
+            crosspostChannels: crosspostChannels,
+            channelId: channelId,
+            threadTs: threadTs
+          };
+
+          actionButtons.push({
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: `📤 他のワークスペースに共有 (${crosspostChannels.length})`,
+              emoji: true
+            },
+            value: JSON.stringify(crosspostValue).slice(0, 1900),
+            action_id: "open_crosspost_selection"
+          });
+        }
+      }
+
       // Add action buttons
       confirmationBlocks.push({
         type: "actions",

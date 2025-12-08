@@ -9,6 +9,7 @@ const AirtableIntegration = require('./airtable-integration');
 const { HybridDeduplicationService } = require('./dynamodb-deduplication');
 const SlackArchive = require('./slack-archive');
 const { generateFollowupMessage, formatMinutesForSlack } = require('./llm-integration');
+const { getInstance: getConversationMemory } = require('./conversation-memory');
 
 // Lambda client for async self-invocation
 const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -1653,6 +1654,298 @@ app.action('back_to_channel_selection', async ({ ack, action, body, client, logg
   }
 });
 
+// --- Crosspost Action Handlers ---
+// Show crosspost channel selection UI
+app.action('open_crosspost_selection', async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== OPEN CROSSPOST SELECTION ===');
+
+  let payload = {};
+  try {
+    payload = JSON.parse(action.value || '{}');
+  } catch (e) {
+    logger.warn('Failed to parse crosspost payload:', e.message);
+  }
+
+  const { crosspostChannels, projectName, summary, minutes, fileName, channelId, threadTs } = payload;
+
+  if (!crosspostChannels || crosspostChannels.length === 0) {
+    logger.warn('No crosspost channels found in payload');
+    return;
+  }
+
+  // Build channel selection blocks
+  const blocks = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "📤 他のワークスペースに共有",
+        emoji: true
+      }
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*${projectName}* の議事録を他のワークスペースに共有します。\n\n📄 ファイル: ${fileName}\n\n共有先のチャンネルを選択してください:`
+      }
+    },
+    {
+      type: "divider"
+    }
+  ];
+
+  // Group channels by workspace
+  const channelsByWorkspace = {};
+  for (const ch of crosspostChannels) {
+    const ws = ch.workspace || 'unknown';
+    if (!channelsByWorkspace[ws]) {
+      channelsByWorkspace[ws] = [];
+    }
+    channelsByWorkspace[ws].push(ch);
+  }
+
+  // Add channel buttons grouped by workspace
+  for (const [workspace, channels] of Object.entries(channelsByWorkspace)) {
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*📱 ${workspace}* ワークスペース`
+      }
+    });
+
+    const channelButtons = channels.map(ch => ({
+      type: "button",
+      text: {
+        type: "plain_text",
+        text: `#${ch.channel_name}`,
+        emoji: true
+      },
+      value: JSON.stringify({
+        channelId: ch.channel_id,
+        channelName: ch.channel_name,
+        workspace: ch.workspace,
+        type: ch.type,
+        projectName,
+        summary: summary ? summary.slice(0, 500) : '',
+        minutes: minutes ? minutes.slice(0, 1000) : '',
+        fileName,
+        sourceChannelId: channelId,
+        sourceThreadTs: threadTs
+      }),
+      action_id: `crosspost_to_channel_${ch.channel_id}`,
+      style: "primary"
+    }));
+
+    // Split into chunks of 5 (Slack limit per action block)
+    const chunks = [];
+    for (let i = 0; i < channelButtons.length; i += 5) {
+      chunks.push(channelButtons.slice(i, i + 5));
+    }
+
+    for (const chunk of chunks) {
+      blocks.push({
+        type: "actions",
+        elements: chunk
+      });
+    }
+  }
+
+  // Add close button
+  blocks.push({
+    type: "divider"
+  });
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        text: {
+          type: "plain_text",
+          text: "閉じる",
+          emoji: true
+        },
+        value: "close",
+        action_id: "cancel_crosspost_selection"
+      }
+    ]
+  });
+
+  // Post the selection UI in the thread
+  await client.chat.postMessage({
+    channel: channelId,
+    thread_ts: threadTs,
+    blocks,
+    text: '他のワークスペースに共有するチャンネルを選択してください'
+  });
+});
+
+// Handle crosspost to specific channel
+app.action(/crosspost_to_channel_.*/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== CROSSPOST TO CHANNEL ===');
+  logger.info('Action ID:', action.action_id);
+
+  let payload = {};
+  try {
+    payload = JSON.parse(action.value || '{}');
+  } catch (e) {
+    logger.error('Failed to parse crosspost action value:', e.message);
+    return;
+  }
+
+  const { channelId, channelName, workspace, projectName, summary, minutes, fileName, sourceChannelId, sourceThreadTs } = payload;
+
+  if (!channelId || !workspace) {
+    logger.error('Missing channelId or workspace in crosspost payload');
+    return;
+  }
+
+  // Get workspace-specific token
+  const { WebClient } = require('@slack/web-api');
+  let targetToken;
+  let targetClient;
+
+  switch (workspace) {
+    case 'techknight':
+      targetToken = process.env.SLACK_BOT_TOKEN_TECHKNIGHT;
+      break;
+    case 'salestailor':
+      targetToken = process.env.SLACK_BOT_TOKEN_SALESTAILOR;
+      break;
+    case 'unson':
+    default:
+      targetToken = process.env.SLACK_BOT_TOKEN;
+      break;
+  }
+
+  if (!targetToken) {
+    logger.error(`No token found for workspace: ${workspace}`);
+    await client.chat.postMessage({
+      channel: sourceChannelId,
+      thread_ts: sourceThreadTs,
+      text: `❌ ワークスペース *${workspace}* のトークンが設定されていません。環境変数を確認してください。`
+    });
+    return;
+  }
+
+  targetClient = new WebClient(targetToken);
+
+  // Post to target channel
+  try {
+    logger.info(`Crossposting to ${workspace}/#${channelName} (${channelId})`);
+
+    // Post summary first
+    const summaryBlocks = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `📝 *会議要約: ${fileName}*\n\n_${projectName} プロジェクトからの共有です_`
+        }
+      },
+      {
+        type: "divider"
+      }
+    ];
+
+    if (summary) {
+      summaryBlocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: summary
+        }
+      });
+    } else {
+      summaryBlocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "📋 要約データが利用できません。"
+        }
+      });
+    }
+
+    summaryBlocks.push(
+      {
+        type: "divider"
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `💬 _詳細な議事録はスレッドに投稿されます_`
+          }
+        ]
+      }
+    );
+
+    const summaryResponse = await targetClient.chat.postMessage({
+      channel: channelId,
+      text: `📝 会議要約: ${fileName}`,
+      blocks: summaryBlocks
+    });
+
+    // Post minutes in thread if available
+    if (minutes) {
+      const minutesBlocks = [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `📄 *詳細議事録*\n\n${minutes.slice(0, 2800)}`
+          }
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: `🤖 _この議事録はAIにより自動生成されました_`
+            }
+          ]
+        }
+      ];
+
+      await targetClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: summaryResponse.ts,
+        text: `📄 詳細議事録: ${fileName}`,
+        blocks: minutesBlocks
+      });
+    }
+
+    // Notify success in source thread
+    await client.chat.postMessage({
+      channel: sourceChannelId,
+      thread_ts: sourceThreadTs,
+      text: `✅ *${workspace}* ワークスペースの *#${channelName}* に議事録を共有しました。`
+    });
+
+    logger.info(`Successfully crossposted to ${workspace}/#${channelName}`);
+
+  } catch (error) {
+    logger.error('Error crossposting to channel:', error);
+    await client.chat.postMessage({
+      channel: sourceChannelId,
+      thread_ts: sourceThreadTs,
+      text: `❌ *${workspace}* ワークスペースへの共有中にエラーが発生しました: ${error.message}`
+    });
+  }
+});
+
+// Cancel crosspost selection
+app.action('cancel_crosspost_selection', async ({ ack, body, client, logger }) => {
+  await ack();
+  logger.info('Crosspost selection cancelled');
+
+  // Just acknowledge - the message will stay but user can ignore it
+});
+
 // --- App Mention Handler (Phase 2: AI PM + Phase 5b: Project AI PM) ---
 // @mana へのメンションに応答
 // - 質問系: Project AI PMに転送（Phase 5b）
@@ -1779,6 +2072,52 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
       // 質問にスレッドコンテキストを追加
       const questionWithContext = cleanedText + threadContext;
 
+      // --- プロジェクトID検出（Memory用に先に実行） ---
+      let projectId = 'general';
+      const textLower = cleanedText.toLowerCase();
+
+      // 1. チャンネル名からプロジェクト検出
+      if (channelName.includes('salestailor')) projectId = 'salestailor';
+      else if (channelName.includes('zeims')) projectId = 'zeims';
+      else if (channelName.includes('techknight')) projectId = 'techknight';
+      else if (channelName.includes('dialogai')) projectId = 'dialogai';
+      else if (channelName.includes('aitle')) projectId = 'aitle';
+
+      // 2. チャンネルで特定できない場合は質問文から検出
+      if (projectId === 'general') {
+        const projectKeywords = {
+          'zeims': ['zeims', 'ゼイムス', '採用管理'],
+          'salestailor': ['salestailor', 'セールステイラー', 'セールスレター'],
+          'techknight': ['techknight', 'テックナイト', 'tech knight'],
+          'aitle': ['aitle', 'アイトル'],
+          'dialogai': ['dialogai', 'ダイアログ'],
+          'senrigan': ['senrigan', 'センリガン', '千里眼'],
+          'baao': ['baao', 'バーオ'],
+        };
+
+        for (const [pid, keywords] of Object.entries(projectKeywords)) {
+          if (keywords.some(kw => textLower.includes(kw.toLowerCase()))) {
+            projectId = pid;
+            logger.info(`Detected project "${pid}" from question keywords`);
+            break;
+          }
+        }
+      }
+
+      // --- 会話メモリ統合（Phase 1） ---
+      const conversationMemory = getConversationMemory();
+      const userId = event.user;
+
+      // ユーザーの質問を保存
+      await conversationMemory.saveMessage(projectId, userId, {
+        role: 'user',
+        content: cleanedText
+      });
+
+      // 過去の会話履歴を取得（最新10件）
+      const conversationHistory = await conversationMemory.formatForLLM(projectId, userId, 10);
+      logger.info(`Conversation history loaded: ${conversationHistory.length} messages for ${projectId}:${userId}`);
+
       // AI PMに質問（Mastraまたは既存Bedrockを使用）
       try {
         let response = null;
@@ -1791,7 +2130,8 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
             channelName,
             senderName,
             threadId: event.ts,
-            teamId: context.teamId || event.team
+            teamId: context.teamId || event.team,
+            conversationHistory  // 会話履歴を渡す
           });
         } catch (e) {
           // Mastra未ロード時は既存のBedrockを使用
@@ -1801,45 +2141,22 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
           const { getProjectContext } = require('./llm-integration');
           const { BedrockRuntimeClient, InvokeModelCommand } = require('@aws-sdk/client-bedrock-runtime');
 
-          // チャンネル名または質問文からプロジェクトを推定
-          let projectId = 'general';
-          const textLower = cleanedText.toLowerCase();
-
-          // 1. チャンネル名からプロジェクト検出
-          if (channelName.includes('salestailor')) projectId = 'salestailor';
-          else if (channelName.includes('zeims')) projectId = 'zeims';
-          else if (channelName.includes('techknight')) projectId = 'techknight';
-          else if (channelName.includes('dialogai')) projectId = 'dialogai';
-          else if (channelName.includes('aitle')) projectId = 'aitle';
-
-          // 2. チャンネルで特定できない場合は質問文から検出
-          if (projectId === 'general') {
-            const projectKeywords = {
-              'zeims': ['zeims', 'ゼイムス', '採用管理'],
-              'salestailor': ['salestailor', 'セールステイラー', 'セールスレター'],
-              'techknight': ['techknight', 'テックナイト', 'tech knight'],
-              'aitle': ['aitle', 'アイトル'],
-              'dialogai': ['dialogai', 'ダイアログ'],
-              'senrigan': ['senrigan', 'センリガン', '千里眼'],
-              'baao': ['baao', 'バーオ'],
-            };
-
-            for (const [pid, keywords] of Object.entries(projectKeywords)) {
-              if (keywords.some(kw => textLower.includes(kw.toLowerCase()))) {
-                projectId = pid;
-                logger.info(`Detected project "${pid}" from question keywords`);
-                break;
-              }
-            }
-          }
+          // projectIdは既に検出済み（上で検出）
 
           const projectContext = await getProjectContext(projectId);
           const contextSection = projectContext
             ? `\n# プロジェクトコンテキスト\n${projectContext.substring(0, 20000)}\n---\n`
             : '';
 
-          const prompt = `${contextSection}
+          // 会話履歴をプロンプトに追加（最新の質問は除く）
+          const historyForPrompt = conversationHistory.slice(0, -1);  // 現在の質問を除く
+          const historySection = historyForPrompt.length > 0
+            ? `\n## 過去の会話\n${historyForPrompt.map(m => `${m.role === 'user' ? '質問者' : 'あなた'}: ${m.content}`).join('\n')}\n---\n`
+            : '';
+
+          const prompt = `${contextSection}${historySection}
 あなたは${projectId}プロジェクトのAIアシスタントです。以下の質問に簡潔に回答してください。
+過去の会話がある場合は、その文脈を踏まえて回答してください。
 
 ## 出力フォーマット（Slack mrkdwn）
 Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
@@ -1867,6 +2184,13 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
           const parsed = JSON.parse(decoded);
           response = parsed.content?.[0]?.text || '回答を生成できませんでした。';
         }
+
+        // 回答をMemoryに保存
+        await conversationMemory.saveMessage(projectId, userId, {
+          role: 'assistant',
+          content: response
+        });
+        logger.info(`Conversation saved: ${projectId}:${userId} (assistant response)`);
 
         await client.chat.update({
           channel: event.channel,
@@ -2736,7 +3060,7 @@ app.view(/^task_edit_submit_/, async ({ ack, view, body, client, logger }) => {
 });
 
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_|open_followup_modal).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_|open_followup_modal|open_crosspost_selection|crosspost_to_channel_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);

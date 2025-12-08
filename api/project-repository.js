@@ -137,6 +137,28 @@ class ProjectRepository {
     }
   }
 
+  /**
+   * Get crosspost channels for a project (channels in other workspaces)
+   * @param {string} projectId - Project ID
+   * @returns {Promise<Array>} - Array of crosspost channel objects
+   */
+  async getCrosspostChannelsForProject(projectId) {
+    try {
+      const project = await this.getProjectById(projectId);
+
+      if (!project) {
+        console.warn(`Project not found: ${projectId}`);
+        return [];
+      }
+
+      return project.crosspost_channels || [];
+
+    } catch (error) {
+      console.error(`Error getting crosspost channels for project ${projectId}:`, error.message);
+      return [];
+    }
+  }
+
   async saveProject(projectData) {
     try {
       const now = Math.floor(Date.now() / 1000);
