@@ -40,6 +40,26 @@ echo "[2/6] Installing production dependencies..."
 (cd "$API_DIR" && npm install --omit=dev)
 echo "      - Done."
 
+# 2.5 Module Load Check
+echo "[2.5/6] Checking Mastra modules..."
+if [ -f "$API_DIR/dist/mastra/tools/source-code.js" ]; then
+  (cd "$API_DIR" && node -e "import('./dist/mastra/tools/source-code.js')" 2>&1) || {
+    echo "      ❌ ERROR: Mastra source-code module failed to load!"
+    echo "      Fix the module before deploying."
+    exit 1
+  }
+  echo "      - source-code.js: OK"
+fi
+if [ -f "$API_DIR/dist/mastra/bridge.js" ]; then
+  (cd "$API_DIR" && node -e "import('./dist/mastra/bridge.js')" 2>&1) || {
+    echo "      ❌ ERROR: Mastra bridge module failed to load!"
+    echo "      Fix the module before deploying."
+    exit 1
+  }
+  echo "      - bridge.js: OK"
+fi
+echo "      - Done."
+
 # 3. Create Zip Package
 echo "[3/6] Creating deployment package..."
 # Create the zip file in a subshell.

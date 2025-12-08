@@ -3,9 +3,10 @@
 
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v4';
-
-const AWS = require('aws-sdk');
-const path = require('path');
+import AWS from 'aws-sdk';
+import path from 'path';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
 const s3 = new AWS.S3({ region: process.env.AWS_REGION || 'us-east-1' });
 const SOURCE_BUCKET = process.env.SOURCE_BUCKET || 'brainbase-source-593793022993';

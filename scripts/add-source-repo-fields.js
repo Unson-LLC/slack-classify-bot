@@ -10,35 +10,44 @@
 const path = require('path');
 const ProjectRepository = require(path.join(__dirname, '../api/project-repository'));
 
-// Default source repo mappings
-// Update these based on actual repository locations
+// Source repo mappings (GitHub owner/repo/branch)
 const SOURCE_REPO_MAPPINGS = {
-  'proj_mana': {
-    source_owner: 'ksato',
-    source_repo: 'mana',
-    source_branch: 'main'
-  },
   'proj_salestailor': {
-    source_owner: 'SalesTailor-inc',
-    source_repo: 'salestailor',
+    source_owner: 'Unson-LLC',
+    source_repo: 'salestailor-project',
     source_branch: 'main'
   },
-  'proj_tech-knight': {
-    source_owner: 'tech-knight-inc',
-    source_repo: 'tech-knight',
+  'proj_tech-knight-board': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'tech-knight-project',
+    source_branch: 'main'
+  },
+  'proj_aitle': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'tech-knight-project',
     source_branch: 'main'
   },
   'proj_zeims': {
-    source_owner: 'ksato',
-    source_repo: 'zeims',
+    source_owner: 'Unson-LLC',
+    source_repo: 'zeims-project',
     source_branch: 'main'
   },
   'proj_baao': {
-    source_owner: 'ksato',
-    source_repo: 'baao',
+    source_owner: 'Unson-LLC',
+    source_repo: 'baao-lark',
+    source_branch: 'main'
+  },
+  'proj_senrigan': {
+    source_owner: 'Unson-LLC',
+    source_repo: 'senrigan-project',
+    source_branch: 'main'
+  },
+  'proj_ncom': {
+    source_owner: 'Unson-LLC',
+    source_repo: 'ncom-catalyst',
     source_branch: 'main'
   }
-  // Add more mappings as needed
+  // Note: proj_back-office, proj_dialogai etc. use Google Drive, not GitHub
 };
 
 async function addSourceRepoFields() {
