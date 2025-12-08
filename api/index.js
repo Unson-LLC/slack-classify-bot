@@ -2275,6 +2275,12 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
     const workspaceId = 'unson-inc';
     const slackLink = `https://${workspaceId}.slack.com/archives/${event.channel}/p${event.ts.replace('.', '')}`;
 
+    // スレッドリマインド用のSlackコンテキスト
+    const slackContext = {
+      channel_id: event.channel,
+      thread_ts: event.ts
+    };
+
     // GitHub APIで各タスクを追記
     const github = new GitHubIntegration();
     const results = [];
@@ -2286,7 +2292,7 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
       task.requester = senderName;
 
       logger.info('Appending task:', task.title);
-      const result = await github.appendTask(task, slackLink);
+      const result = await github.appendTask(task, slackLink, slackContext);
       if (result.success) {
         results.push({ task, result });
         logger.info('Task appended:', result.taskId);
@@ -2572,9 +2578,15 @@ app.message(async ({ message, client, logger }) => {
     const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
     const slackLink = `https://${workspaceId}.slack.com/archives/${message.channel}/p${message.ts.replace('.', '')}`;
 
+    // スレッドリマインド用のSlackコンテキスト
+    const slackContext = {
+      channel_id: message.channel,
+      thread_ts: message.ts
+    };
+
     // GitHub APIでタスクを追記
     const github = new GitHubIntegration();
-    const result = await github.appendTask(task, slackLink);
+    const result = await github.appendTask(task, slackLink, slackContext);
 
     if (result.success) {
       logger.info('Task appended successfully:', result);
@@ -3072,7 +3084,7 @@ app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_pr
 // --- Lambda Handler ---
 // This is the standard handler format for Bolt on AWS Lambda.
 module.exports.handler = async (event, context, callback) => {
-  // Check for scheduled reminder trigger
+  // Check for scheduled reminder trigger (daily DM summary)
   if (event.source === 'aws.events' || event.action === 'run_reminders') {
     const { WebClient } = require('@slack/web-api');
     const ReminderService = require('./reminder');
@@ -3089,6 +3101,30 @@ module.exports.handler = async (event, context, callback) => {
       };
     } catch (error) {
       console.error('Failed to run reminders:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
+  }
+
+  // Check for thread-based reminder trigger (for Slack-created tasks)
+  if (event.action === 'run_thread_reminders') {
+    const { WebClient } = require('@slack/web-api');
+    const SlackThreadReminderService = require('./slack-thread-reminder');
+
+    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+    const threadReminderService = new SlackThreadReminderService(slackClient);
+
+    try {
+      const results = await threadReminderService.runSlackReminders();
+      console.log('Thread reminders completed:', JSON.stringify(results, null, 2));
+      return {
+        statusCode: 200,
+        body: JSON.stringify(results)
+      };
+    } catch (error) {
+      console.error('Failed to run thread reminders:', error);
       return {
         statusCode: 500,
         body: JSON.stringify({ error: error.message })

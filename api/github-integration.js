@@ -211,10 +211,14 @@ ${minutes || '詳細議事録なし'}
    * @param {string|null} task.due - 期限(YYYY-MM-DD)
    * @param {string} task.context - コンテキスト/背景
    * @param {string} task.requester - 依頼者
+   * @param {string} task.assignee_slack_id - 担当者のSlack ID
    * @param {string} slackLink - Slackメッセージへのリンク
+   * @param {Object} slackContext - Slackコンテキスト情報（スレッドリマインド用）
+   * @param {string} slackContext.channel_id - SlackチャンネルID
+   * @param {string} slackContext.thread_ts - スレッドタイムスタンプ
    * @returns {Promise<Object>} - コミット結果
    */
-  async appendTask(task, slackLink = '') {
+  async appendTask(task, slackLink = '', slackContext = null) {
     const owner = 'sintariran';
     const repo = 'brainbase';
     const branch = 'main';
@@ -232,6 +236,17 @@ ${minutes || '詳細議事録なし'}
     const taskOwner = task.assignee || 'keigo';
     const ownerFormatted = taskOwner.replace(' ', '-').toLowerCase();
 
+    // Slackコンテキストがある場合のみSlack関連フィールドを追加
+    const hasSlackContext = slackContext && slackContext.channel_id && slackContext.thread_ts;
+    const requesterField = task.requester ? `requester: ${task.requester.replace(/\s+/g, '-').toLowerCase()}\n` : '';
+    const slackFields = hasSlackContext ? `source: slack
+channel_id: ${slackContext.channel_id}
+thread_ts: "${slackContext.thread_ts}"
+created_at: "${now.toISOString()}"
+owner_slack_id: ${task.assignee_slack_id || ''}
+${requesterField}` : `created_at: "${now.toISOString()}"
+${requesterField}`;
+
     // タスクをYAML形式でフォーマット
     const taskEntry = `---
 id: ${taskId}
@@ -243,7 +258,7 @@ priority: ${task.priority || 'medium'}
 due: ${task.due || 'null'}
 tags: [slack, auto-import]
 links: []
----
+${slackFields}---
 
 - ${dateStr} Slackから自動取り込み: ${task.requester}から依頼
 - 担当: ${taskOwner}

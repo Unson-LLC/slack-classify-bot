@@ -170,7 +170,133 @@ class ReminderService {
     return results;
   }
 
-  async sendDailySummary(slackId) {
+  formatDueDate(due) {
+    if (!due || due === 'null') {
+      return '';
+    }
+    const date = new Date(due + 'T00:00:00+09:00');
+    const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const weekday = weekdays[date.getDay()];
+    return `${month.toString().padStart(2, '0')}/${day.toString().padStart(2, '0')}(${weekday}) まで`;
+  }
+
+  formatDateHeader(now) {
+    const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+    const month = now.getMonth() + 1;
+    const day = now.getDate();
+    const weekday = weekdays[now.getDay()];
+    return `${month}月${day}日(${weekday})`;
+  }
+
+  formatDailySummaryBlocks(ownedTasks, requestedTasks, now) {
+    const totalCount = ownedTasks.length + requestedTasks.length;
+    const dateHeader = this.formatDateHeader(now);
+
+    if (totalCount === 0) {
+      return [
+        {
+          type: 'header',
+          text: { type: 'plain_text', text: `${dateHeader}の要確認タスク: 0件` }
+        },
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: '✨ 確認が必要なタスクはありません' }
+        }
+      ];
+    }
+
+    const blocks = [
+      {
+        type: 'header',
+        text: { type: 'plain_text', text: `${dateHeader}の要確認タスク: ${totalCount}件` }
+      }
+    ];
+
+    if (ownedTasks.length > 0) {
+      blocks.push({ type: 'divider' });
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*📋 担当中* (${ownedTasks.length}件)` }
+      });
+
+      for (const task of ownedTasks.slice(0, 5)) {
+        const dueText = this.formatDueDate(task.due);
+        const projectText = task.project_id ? `#${task.project_id}` : '';
+
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*${task.title}*\n${dueText}${projectText ? ` | ${projectText}` : ''}`
+          }
+        });
+
+        blocks.push({
+          type: 'actions',
+          elements: [
+            {
+              type: 'static_select',
+              placeholder: { type: 'plain_text', text: '期限を見直す' },
+              action_id: `task_reschedule_${task.id}`,
+              options: [
+                { text: { type: 'plain_text', text: '明日' }, value: JSON.stringify({ taskId: task.id, offset: 1 }) },
+                { text: { type: 'plain_text', text: '3日後' }, value: JSON.stringify({ taskId: task.id, offset: 3 }) },
+                { text: { type: 'plain_text', text: '1週間後' }, value: JSON.stringify({ taskId: task.id, offset: 7 }) }
+              ]
+            },
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: '✅ 完了' },
+              style: 'primary',
+              action_id: `task_complete_${task.id}`,
+              value: JSON.stringify({ taskId: task.id })
+            }
+          ]
+        });
+      }
+
+      if (ownedTasks.length > 5) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: `他 ${ownedTasks.length - 5} 件のタスクがあります` }]
+        });
+      }
+    }
+
+    if (requestedTasks.length > 0) {
+      blocks.push({ type: 'divider' });
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `*📤 依頼中* (${requestedTasks.length}件)` }
+      });
+
+      for (const task of requestedTasks.slice(0, 5)) {
+        const dueText = this.formatDueDate(task.due);
+        const ownerText = task.owner ? `担当: ${task.owner}` : '';
+
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*${task.title}*\n${dueText}${ownerText ? ` | ${ownerText}` : ''}`
+          }
+        });
+      }
+
+      if (requestedTasks.length > 5) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: `他 ${requestedTasks.length - 5} 件の依頼があります` }]
+        });
+      }
+    }
+
+    return blocks;
+  }
+
+  async sendDailySummary(slackId, now = new Date()) {
     const idToName = await getSlackIdToBrainbaseName();
     const ownerName = idToName.get(slackId);
 
@@ -178,65 +304,20 @@ class ReminderService {
       return { success: false, error: 'Owner name not found' };
     }
 
-    const allTasks = await this.taskParser.getTasksByOwner(ownerName);
-    const overdue = allTasks.filter(t => {
-      const today = new Date().toISOString().split('T')[0];
-      return t.due && t.due !== 'null' && t.due < today;
-    });
-    const dueSoon = allTasks.filter(t => {
-      const today = new Date();
-      const threeDays = new Date(today);
-      threeDays.setDate(threeDays.getDate() + 3);
-      const todayStr = today.toISOString().split('T')[0];
-      const futureStr = threeDays.toISOString().split('T')[0];
-      return t.due && t.due !== 'null' && t.due >= todayStr && t.due <= futureStr;
-    });
-    const highPriority = allTasks.filter(t => t.priority === 'high');
+    const ownedTasks = await this.taskParser.getTasksByOwner(ownerName);
+    const requestedTasks = await this.taskParser.getTasksByRequester(ownerName);
 
-    if (allTasks.length === 0) {
+    const blocks = this.formatDailySummaryBlocks(ownedTasks, requestedTasks, now);
+
+    const totalCount = ownedTasks.length + requestedTasks.length;
+    if (totalCount === 0) {
       return { success: true, message: 'No pending tasks' };
-    }
-
-    const blocks = [
-      {
-        type: "header",
-        text: { type: "plain_text", text: "📊 本日のタスクサマリー" }
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*${ownerName}さん、おはようございます！*\n\n📋 未完了タスク: ${allTasks.length}件\n⏰ 期限切れ: ${overdue.length}件\n📅 今後3日で期限: ${dueSoon.length}件\n🔴 高優先度: ${highPriority.length}件`
-        }
-      }
-    ];
-
-    if (overdue.length > 0) {
-      blocks.push({ type: "divider" });
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*⏰ 期限切れタスク*\n${overdue.slice(0, 5).map(t => `• ${t.title} (${t.due})`).join('\n')}`
-        }
-      });
-    }
-
-    if (dueSoon.length > 0) {
-      blocks.push({ type: "divider" });
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*📅 今後3日で期限のタスク*\n${dueSoon.slice(0, 5).map(t => `• ${t.title} (${t.due})`).join('\n')}`
-        }
-      });
     }
 
     try {
       await this.slackClient.chat.postMessage({
         channel: slackId,
-        text: `📊 本日のタスクサマリー: ${allTasks.length}件の未完了タスク`,
+        text: `📊 ${this.formatDateHeader(now)}の要確認タスク: ${totalCount}件`,
         blocks: blocks
       });
       return { success: true };

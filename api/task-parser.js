@@ -134,6 +134,17 @@ class TaskParser {
       task.status !== 'completed'
     );
   }
+
+  async getTasksByRequester(requester) {
+    const tasks = await this.getTasks();
+    const requesterLower = requester.toLowerCase().replace(/\s+/g, '-');
+    return tasks.filter(task =>
+      task.requester &&
+      task.requester.toLowerCase() === requesterLower &&
+      task.status !== 'done' &&
+      task.status !== 'completed'
+    );
+  }
 }
 
 module.exports = TaskParser;

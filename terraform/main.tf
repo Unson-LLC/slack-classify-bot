@@ -1,7 +1,7 @@
 # Terraform configuration for mana
 terraform {
   required_version = ">= 1.0"
-  
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -37,9 +37,9 @@ variable "environment_variables" {
 
 # DynamoDB Table for Event Deduplication
 resource "aws_dynamodb_table" "processed_events" {
-  name           = "mana-processed-events"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "event_key"
+  name         = "mana-processed-events"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "event_key"
 
   attribute {
     name = "event_key"
@@ -59,20 +59,20 @@ resource "aws_dynamodb_table" "processed_events" {
 
 # Lambda Function
 resource "aws_lambda_function" "slack_classify_bot" {
-  filename         = "../api/lambda-package.zip"
-  function_name    = "mana"
-  role            = aws_iam_role.lambda_execution_role.arn
-  handler         = "index.handler"
-  runtime         = "nodejs18.x"
-  timeout         = 30
-  memory_size     = 256
-  
+  filename      = "../api/lambda-package.zip"
+  function_name = "mana"
+  role          = aws_iam_role.lambda_execution_role.arn
+  handler       = "index.handler"
+  runtime       = "nodejs18.x"
+  timeout       = 30
+  memory_size   = 256
+
   environment {
     variables = merge(
       var.environment_variables,
       {
         DEDUP_TABLE_NAME = aws_dynamodb_table.processed_events.name
-        AWS_REGION      = var.aws_region
+        AWS_REGION       = var.aws_region
       }
     )
   }
@@ -184,6 +184,58 @@ resource "aws_iam_role_policy" "lambda_bedrock_policy" {
       Resource = "arn:aws:bedrock:us-east-1:*:inference-profile/us.anthropic.claude-sonnet-4-*"
     }]
   })
+}
+
+# EventBridge Rule for Daily DM Summary (9:00 AM JST = 0:00 UTC)
+resource "aws_cloudwatch_event_rule" "daily_reminder" {
+  name                = "mana-daily-reminder"
+  description         = "Trigger daily DM summary at 9:00 AM JST"
+  schedule_expression = "cron(0 0 * * ? *)"
+
+  tags = {
+    Application = "mana"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "daily_reminder_target" {
+  rule      = aws_cloudwatch_event_rule.daily_reminder.name
+  target_id = "mana-daily-reminder"
+  arn       = aws_lambda_function.slack_classify_bot.arn
+  input     = jsonencode({ action = "run_reminders" })
+}
+
+resource "aws_lambda_permission" "allow_eventbridge_daily" {
+  statement_id  = "AllowExecutionFromEventBridgeDaily"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.slack_classify_bot.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.daily_reminder.arn
+}
+
+# EventBridge Rule for Thread Reminders (every hour)
+resource "aws_cloudwatch_event_rule" "thread_reminder" {
+  name                = "mana-thread-reminder"
+  description         = "Trigger thread reminders for Slack-created tasks"
+  schedule_expression = "rate(1 hour)"
+
+  tags = {
+    Application = "mana"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "thread_reminder_target" {
+  rule      = aws_cloudwatch_event_rule.thread_reminder.name
+  target_id = "mana-thread-reminder"
+  arn       = aws_lambda_function.slack_classify_bot.arn
+  input     = jsonencode({ action = "run_thread_reminders" })
+}
+
+resource "aws_lambda_permission" "allow_eventbridge_thread" {
+  statement_id  = "AllowExecutionFromEventBridgeThread"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.slack_classify_bot.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.thread_reminder.arn
 }
 
 # Outputs

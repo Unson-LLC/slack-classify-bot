@@ -81,7 +81,8 @@ mana/
 │   ├── index.js              # エントリポイント（Slack Boltハンドラ）
 │   ├── task-ui.js            # サポット風タスクUIブロック
 │   ├── task-parser.js        # _tasks/index.mdパーサー
-│   ├── reminder.js           # リマインダーサービス
+│   ├── reminder.js           # リマインダーサービス（DM送信、旧方式）
+│   ├── slack-thread-reminder.js # スレッドリマインダー（Slackタスク専用）
 │   ├── project-repository.js # DynamoDBアクセス層
 │   ├── github-integration.js # GitHub API連携（Octokit）
 │   ├── llm-integration.js    # AWS Bedrock LLM連携
@@ -91,6 +92,57 @@ mana/
 ├── scripts/                   # ユーティリティスクリプト
 ├── terraform/                 # インフラコード（使用停止中）
 └── README.md                  # プロジェクトREADME
+```
+
+## タスクデータ構造
+
+Slackから作成されたタスクは以下のフィールドを持つ：
+
+```yaml
+---
+id: SLACK-2025-12-08-XXX
+title: タスクタイトル
+project_id: general
+status: todo
+owner: keigo
+priority: medium
+due: null
+tags: [slack, auto-import]
+links: []
+source: slack                      # Slackから作成された場合のみ
+channel_id: C123456789             # スレッドリマインド用
+thread_ts: "1733644800.123456"     # スレッドリマインド用
+created_at: "2025-12-08T10:00:00Z" # リマインド起算用
+owner_slack_id: U123456789         # 担当者メンション用
+---
+```
+
+### リマインダー仕様
+
+**二重リマインダーシステム:**
+
+#### 1. DMサマリー（サポット風UI）
+- **トリガー**: EventBridge で毎日9:00 JST
+- **対象**: 全ての未完了タスク（担当中 + 依頼中）
+- **UI**: 日付ヘッダー + 担当中/依頼中セクション
+- **アクション**: 「期限を見直す」ドロップダウン + 「完了」ボタン
+- **実装**: `reminder.js` の `sendDailySummary()`
+
+#### 2. スレッドリマインド
+- **トリガー**: EventBridge で1時間ごと
+- **対象**: `source: slack` のタスクのみ
+- **リマインド先**: タスク作成元のスレッド（DMではない）
+- **リマインド時刻**: `created_at`から起算（例: 24時間後）
+- **完了検知**: スレッドでの完了報告またはボタン操作
+- **実装**: `slack-thread-reminder.js`
+
+#### EventBridge設定（terraform/main.tf）
+```hcl
+# 毎日9:00 JST (0:00 UTC)
+schedule_expression = "cron(0 0 * * ? *)"  # daily_reminder
+
+# 1時間ごと
+schedule_expression = "rate(1 hour)"       # thread_reminder
 ```
 
 ## データストレージ
