@@ -60,6 +60,18 @@ if [ -f "$API_DIR/dist/mastra/bridge.js" ]; then
 fi
 echo "      - Done."
 
+# 2.6 Tool Execution Test
+echo "[2.6/6] Testing tool execution..."
+if [ -f "$API_DIR/scripts/test-tools-execution.mjs" ]; then
+  (cd "$API_DIR" && node scripts/test-tools-execution.mjs 2>&1) || {
+    echo "      ❌ ERROR: Tool execution test failed!"
+    echo "      Fix the issues before deploying."
+    exit 1
+  }
+else
+  echo "      ⚠️  Skipping (test script not found)"
+fi
+
 # 3. Create Zip Package
 echo "[3/6] Creating deployment package..."
 # Create the zip file in a subshell.

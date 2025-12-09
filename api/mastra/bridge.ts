@@ -6,6 +6,7 @@ import { getManaByTeamId, getAgent, allAgents, canAccessProject } from './index.
 import { getWorkspaceByTeamId, getDefaultWorkspace, type WorkspaceConfig } from './config/workspaces.js';
 import { getProjectByChannel, getAirtableConfigByChannel, type AirtableConfig } from './config/projects.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { setCurrentProjectId } from './tools/source-code.js';
 
 const BEDROCK_REGION = 'us-east-1';
 const BRAINBASE_CONTEXT_BUCKET = 'brainbase-context-593793022993';
@@ -403,7 +404,16 @@ Airtableツール使用時は必ずこのBase IDを使用してください。�
   const prompt = `${formatInstruction}${scopeRestriction}${airtableContext}${contextSection}${senderInfo}${question}`;
 
   try {
-    const result = await agent.generate(prompt);
+    // ソースコードツールにプロジェクトIDを設定
+    if (projectId) {
+      setCurrentProjectId(`proj_${projectId}`);
+    }
+
+    // ツール呼び出しを有効化（auto = LLMが必要に応じてツールを使う）
+    const result = await agent.generate(prompt, {
+      toolChoice: 'auto',
+      maxSteps: 5, // ツール呼び出しの最大ステップ数
+    });
     return result.text;
   } catch (error) {
     console.error('askMana error:', error);

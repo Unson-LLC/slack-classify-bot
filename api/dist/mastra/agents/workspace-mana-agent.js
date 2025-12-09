@@ -10,7 +10,7 @@ import { slackPostMessageTool, slackAddReactionTool } from '../tools/slack.js';
 import { webSearchTool, webExtractTool } from '../tools/tavily.js';
 import { airtableListBasesTool, airtableListTablesTool, airtableListRecordsTool, airtableSearchRecordsTool, airtableGetRecordTool, airtableCreateRecordTool, airtableUpdateRecordTool, } from '../tools/airtable.js';
 import { gmailListMessagesTool, gmailGetMessageTool, gmailSearchMessagesTool, gmailSendMessageTool, gmailListLabelsTool, gmailGetThreadTool, } from '../tools/gmail.js';
-import { listSourceFilesTool, readSourceFileTool, searchSourceCodeTool } from '../tools/source-code.js';
+import { listSourceFilesTool, readSourceFileTool, searchSourceCodeTool, } from '../tools/source-code.js';
 /**
  * ワークスペース単位のManaエージェントを生成する
  */
@@ -33,7 +33,6 @@ ${projectList}
 3. **リマインド**: 期限切れ・未着手タスクのリマインド
 4. **コンテキスト提供**: プロジェクト状況をチームメンバーに説明
 5. **質問応答**: brainbaseの情報に基づいて質問に回答
-6. **ソースコード調査**: プロジェクトのソースコードを調査・説明する
 
 ## アクセス制御（重要）
 - **スコープ内のプロジェクト情報のみ**参照・回答できます
@@ -112,24 +111,6 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 - 特定の送信者: from="example@gmail.com"
 - 添付ファイル付き: hasAttachment=true
 - 期間指定: after="2025/12/01", before="2025/12/08"
-
-### ソースコード調査 → list_source_files, read_source_file, search_source_code を使用
-プロジェクトのソースコードを調査する際に使用。
-
-利用可能な操作：
-- ファイル一覧取得: list_source_files（ディレクトリ指定可能）
-- ファイル内容読み取り: read_source_file（パス指定で内容取得）
-- コード内検索: search_source_code（キーワードで検索）
-
-調査の進め方：
-1. まず list_source_files でディレクトリ構造を把握
-2. 関連しそうなファイルを read_source_file で読む
-3. 特定のキーワードを探す場合は search_source_code
-
-例：
-- 「Slackのイベント処理を見せて」→ list_source_files + read_source_file
-- 「handleMessage関数はどこ？」→ search_source_code
-- 「APIのエンドポイント一覧は？」→ list_source_files で api/ を探索
 
 ### その他ツール
 - 議事録コミット時は github_commit_minutes を使用

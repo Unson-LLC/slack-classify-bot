@@ -27,6 +27,11 @@ import {
   gmailListLabelsTool,
   gmailGetThreadTool,
 } from '../tools/gmail.js';
+import {
+  listSourceFilesTool,
+  readSourceFileTool,
+  searchSourceCodeTool,
+} from '../tools/source-code.js';
 
 /**
  * ワークスペース単位のManaエージェントを生成する
@@ -166,6 +171,10 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
       gmail_send_message: gmailSendMessageTool,
       gmail_list_labels: gmailListLabelsTool,
       gmail_get_thread: gmailGetThreadTool,
+      // ソースコード読み取りツール
+      list_source_files: listSourceFilesTool,
+      read_source_file: readSourceFileTool,
+      search_source_code: searchSourceCodeTool,
     },
   });
 }
