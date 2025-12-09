@@ -135,6 +135,20 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 - 添付ファイル付き: hasAttachment=true
 - 期間指定: after="2025/12/01", before="2025/12/08"
 
+### ソースコード調査 → list_source_files, read_source_file, search_source_code を使用
+プロジェクトのソースコードを調査・参照する際に使用。
+**このワークスペースのプロジェクト（${config.projects.join(', ')}）のソースコードは読み取り可能です。**
+
+利用可能な操作：
+- ファイル一覧: list_source_files（ディレクトリ構造を確認）
+- ファイル読み取り: read_source_file（特定ファイルの内容を取得）
+- コード検索: search_source_code（キーワードでコード内を検索）
+
+使用例：
+- 「このプロジェクトのファイル構造を教えて」→ list_source_files
+- 「○○の実装を見せて」→ search_source_code + read_source_file
+- 「プロンプトの内容を確認して」→ search_source_code で "prompt" を検索
+
 ### その他ツール
 - 議事録コミット時は github_commit_minutes を使用
 - Slack通知時は slack_post_message を使用

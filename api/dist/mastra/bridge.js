@@ -368,7 +368,7 @@ Airtableツール使用時は必ずこのBase IDを使用してください。�
         // ツール呼び出しを有効化（auto = LLMが必要に応じてツールを使う）
         const result = await agent.generate(prompt, {
             toolChoice: 'auto',
-            maxSteps: 15, // ツール呼び出しの最大ステップ数（ソースコード調査には複数ステップ必要）
+            maxSteps: 50, // ツール呼び出しの最大ステップ数（ソースコード調査には複数ステップ必要）
             onStepFinish: options.onProgress ? async (step) => {
                 const now = Date.now();
                 if (now - lastProgressUpdate < PROGRESS_THROTTLE_MS) {

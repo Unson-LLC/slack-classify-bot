@@ -16,16 +16,14 @@
 set -e # Exit immediately if a command fails
 
 REGION="us-east-1"
-# 全ワークスペース用のLambda関数をデプロイ
-FUNCTION_NAMES=("mana" "mana-salestailor" "mana-techknight")
+FUNCTION_NAME="mana-salestailor"
 ZIP_FILE="lambda-package.zip"
 API_DIR="api"
 ENV_FILE="env-vars-update.json"
 VERSION=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # --- Deployment Logic ---
-echo "🚀 Starting deployment to $REGION..."
-echo "   Target functions: ${FUNCTION_NAMES[*]}"
+echo "🚀 Starting deployment of '$FUNCTION_NAME' to $REGION..."
 
 # 0. Create Version File
 echo "[0/6] Creating version file..."
@@ -38,8 +36,8 @@ rm -f "$API_DIR/$ZIP_FILE"
 echo "      - Done."
 
 # 2. Install Dependencies
-echo "[2/6] Installing dependencies..."
-(cd "$API_DIR" && npm install)
+echo "[2/6] Installing production dependencies..."
+(cd "$API_DIR" && npm install --omit=dev)
 echo "      - Done."
 
 # 2.5 Module Load Check
@@ -123,34 +121,27 @@ echo "[3/6] Creating deployment package..."
   -x "./*.zip")
 echo "      - Done."
 
-# 4. Update Function Code (全Lambda関数にデプロイ)
+# 4. Update Function Code
 echo "[4/6] Updating Lambda function code..."
-for FUNC_NAME in "${FUNCTION_NAMES[@]}"; do
-  echo "      - Deploying to $FUNC_NAME..."
-  aws lambda update-function-code \
-    --function-name "$FUNC_NAME" \
-    --zip-file "fileb://function.zip" \
-    --region "$REGION" \
-    --profile k.sato \
-    --no-cli-pager > /dev/null
-done
+aws lambda update-function-code \
+  --function-name "$FUNCTION_NAME" \
+  --zip-file "fileb://function.zip" \
+  --region "$REGION" \
+  --profile k.sato \
+  --no-cli-pager
 echo "      - Done."
 
 echo "--> Waiting for function code to be updated..."
-for FUNC_NAME in "${FUNCTION_NAMES[@]}"; do
-  echo "      - Waiting for $FUNC_NAME..."
-  aws lambda wait function-updated \
-    --function-name "$FUNC_NAME" \
-    --region "$REGION" \
-    --profile k.sato \
-    --no-cli-pager
-done
+aws lambda wait function-updated \
+  --function-name "$FUNCTION_NAME" \
+  --region "$REGION" \
+  --profile k.sato \
+  --no-cli-pager
 echo "      - Done."
 
 # --- Environment Variables ---
-# 注意: 環境変数はワークスペースごとに異なるため、manaのみ更新
-# salestailor/techknightはAWSコンソールで個別に設定
-echo "[5/6] Updating environment variables (mana only)..."
+echo "[5/6] Updating environment variables..."
+# Check if env.json exists
 if [ ! -f "$API_DIR/env.json" ]; then
   echo "      ⚠️  Warning: env.json not found. Skipping environment variable update."
   echo "      To update environment variables, create $API_DIR/env.json from env.json.template"
@@ -161,10 +152,10 @@ else
     echo "      Please update env.json with actual values before deploying."
     exit 1
   fi
-
+  
   echo "      - Updating environment variables from env.json..."
   aws lambda update-function-configuration \
-    --function-name "mana" \
+    --function-name "$FUNCTION_NAME" \
     --region "$REGION" \
     --environment "file://$API_DIR/env.json" \
     --profile k.sato \
@@ -173,15 +164,12 @@ else
 fi
 
 # --- Finalization ---
+FUNCTION_URL=$(aws lambda get-function-url-config --function-name "$FUNCTION_NAME" --region "$REGION" --profile k.sato --query "FunctionUrl" --output text)
 echo ""
 echo "✅ Deployment Successful!"
-echo "   Deployed to: ${FUNCTION_NAMES[*]}"
-for FUNC_NAME in "${FUNCTION_NAMES[@]}"; do
-  FUNC_URL=$(aws lambda get-function-url-config --function-name "$FUNC_NAME" --region "$REGION" --profile k.sato --query "FunctionUrl" --output text 2>/dev/null || echo "N/A")
-  echo "   - $FUNC_NAME: $FUNC_URL"
-done
+echo "Function URL: $FUNCTION_URL"
 echo ""
 
 echo "[6/6] Waiting for deployment to finalize..."
-sleep 5 # Wait for the deployment to finalize
+sleep 10 # Wait for the deployment to finalize
 echo "      - Done." 

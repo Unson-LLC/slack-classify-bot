@@ -659,22 +659,23 @@ ${projectContext ? `# 参照用プロジェクトコンテキスト\n${projectCo
 }
 
 /**
- * Slackメッセージからタスクを抽出する
+ * Slackメッセージから複数のタスクを抽出する
  * @param {string} message - Slackメッセージ本文
  * @param {string} channelName - チャンネル名（プロジェクト推定用）
  * @param {string} senderName - 送信者名
- * @returns {Promise<Object|null>} - 抽出されたタスク情報
+ * @param {string} assigneeName - 担当者名（フィルタリング用、オプション）
+ * @returns {Promise<Array>} - 抽出されたタスク情報の配列
  */
-async function extractTaskFromMessage(message, channelName = '', senderName = '') {
+async function extractTasksFromMessage(message, channelName = '', senderName = '', assigneeName = '') {
   if (!message || message.trim() === '') {
-    return null;
+    return [];
   }
 
   // Mastraブリッジが有効な場合は委譲
   const bridge = getMastraBridge();
-  if (bridge) {
-    console.log('Using Mastra bridge for extractTaskFromMessage');
-    return bridge.extractTaskFromMessage(message, channelName, senderName);
+  if (bridge && bridge.extractTasksFromMessage) {
+    console.log('Using Mastra bridge for extractTasksFromMessage');
+    return bridge.extractTasksFromMessage(message, channelName, senderName, assigneeName);
   }
 
   const modelId = resolveModelId();
@@ -684,20 +685,23 @@ async function extractTaskFromMessage(message, channelName = '', senderName = ''
 # メッセージ情報
 - チャンネル: ${channelName || '不明'}
 - 送信者: ${senderName || '不明'}
+- 担当者: ${assigneeName || '不明'}
 - メッセージ: ${message}
 
 # 出力形式
-JSONのみを出力してください。
+タスクの**配列**をJSON形式で出力してください。タスクが1件でも配列で出力。
 
 \`\`\`json
-{
-  "title": "タスクの簡潔なタイトル（30文字以内）",
-  "project_id": "プロジェクトID（チャンネル名から推測、不明ならgeneral）",
-  "priority": "high/medium/low（依頼の緊急度から判断）",
-  "due": "期限（YYYY-MM-DD形式、明示されていればnull）",
-  "context": "タスクの背景・詳細（元のメッセージを要約）",
-  "requester": "依頼者名"
-}
+[
+  {
+    "title": "タスクの簡潔なタイトル（30文字以内）",
+    "project_id": "プロジェクトID（チャンネル名から推測、不明ならgeneral）",
+    "priority": "high/medium/low（依頼の緊急度から判断）",
+    "due": "期限（YYYY-MM-DD形式、明示されていなければnull）",
+    "context": "タスクの背景・詳細（元のメッセージを要約）",
+    "requester": "依頼者名"
+  }
+]
 \`\`\`
 
 # プロジェクトID候補
@@ -708,17 +712,50 @@ JSONのみを出力してください。
 - zeims: Zeims関連
 - general: その他/不明
 
-# 重要ルール
-- このメッセージは @bot と @担当者 へのメンションを含む「タスク依頼」です
-- メンション（<@XXXXX>）を除去した部分がそのままタスク内容になります
-- 仕事タスクに限らず、個人的なタスク（運動、食事、買い物等）もすべてタスクとして抽出
-- 内容が短くても必ずJSON形式で出力してください
-- nullを返してはいけません。必ずJSONを出力してください
+# 最重要ルール - メタ指示の処理
+
+**【スレッドの文脈】がある場合、依頼文を絶対にタスク化しないこと！**
+
+依頼文が以下のようなメタ指示の場合：
+- 「〜のタスクを登録して」「〜を_taskに入れて」「〜の宿題を追加して」
+- 「これやっといて」「これ対応して」
+
+→ 依頼文自体をタスクにするのは**絶対禁止**
+→ 必ず【スレッドの文脈】から実際のアクションアイテムを探して抽出すること
+
+例1:
+- 依頼文: 「佐藤のタスクを全て登録して」
+- 文脈に「佐藤: 来週までにレポート提出」「佐藤さんがAPI設計を担当」とある場合
+- ❌ NG: [{title: "佐藤のタスクを全て登録"}]
+- ✅ OK: [{title: "来週までにレポート提出"}, {title: "API設計を担当"}]
+
+例2:
+- 依頼文: 「これやっといて」
+- 文脈に「テストコードの修正が必要」とある場合
+- ❌ NG: [{title: "これやっといて"}]
+- ✅ OK: [{title: "テストコードの修正"}]
+
+# その他のルール
+
+1. **担当者フィルタ**
+   - 担当者が指定されている場合（例: 佐藤）、その人のタスクのみを抽出
+   - 議事録などで「佐藤: 〜する」「佐藤さんが〜」「佐藤の宿題」と書かれているものを抽出
+
+2. **複数タスク対応**
+   - 文脈に複数のタスクがある場合、すべて抽出して配列で返す
+   - 最大10件まで
+
+3. **文脈がない場合のみ**
+   - 【スレッドの文脈】がない場合に限り、依頼文そのものをタスク内容として解釈
+
+4. **必ず配列を返す**
+   - タスクがなくても空配列 [] を返す
+   - nullや単一オブジェクトではなく、必ず配列形式
 `;
 
   const payload = {
     anthropic_version: "bedrock-2023-05-31",
-    max_tokens: 1024,
+    max_tokens: 4096,
     messages: [{
       role: "user",
       content: [{ type: "text", text: prompt }]
@@ -735,25 +772,38 @@ JSONのみを出力してください。
       const jsonMatch = rawResponse.match(/```json\s*([\s\S]*?)\s*```/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[1]);
-        if (parsed === null) return null;
-        return parsed;
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed === null) return [];
+        return [parsed]; // 単一オブジェクトの場合は配列にラップ
       }
 
       // Try parsing as raw JSON
       const trimmed = rawResponse.trim();
-      if (trimmed === 'null') return null;
-      if (trimmed.startsWith('{')) {
+      if (trimmed === 'null' || trimmed === '[]') return [];
+      if (trimmed.startsWith('[')) {
         return JSON.parse(trimmed);
       }
+      if (trimmed.startsWith('{')) {
+        return [JSON.parse(trimmed)];
+      }
 
-      return null;
+      return [];
     }
   } catch (error) {
     console.error('タスク抽出エラー:', error);
-    return null;
+    return [];
   }
 
-  return null;
+  return [];
+}
+
+/**
+ * Slackメッセージからタスクを抽出する（後方互換性のため維持）
+ * @deprecated extractTasksFromMessage を使用してください
+ */
+async function extractTaskFromMessage(message, channelName = '', senderName = '') {
+  const tasks = await extractTasksFromMessage(message, channelName, senderName);
+  return tasks.length > 0 ? tasks[0] : null;
 }
 
 module.exports = {
@@ -764,5 +814,6 @@ module.exports = {
   formatMinutesForGitHub,
   formatMinutesForSlack,
   generateFollowupMessage,
-  extractTaskFromMessage
+  extractTaskFromMessage,
+  extractTasksFromMessage
 };

@@ -89,6 +89,95 @@ process.on('SIGTERM', () => {
 const SLACK_MESSAGE_LIMIT = 35000; // Slackの上限は40000、余裕を持たせる
 
 /**
+ * Slackメッセージのblocksからテキストを再帰的に抽出する
+ * @param {Array|Object} blocks - Slack blocks or elements
+ * @returns {string} 抽出されたテキスト
+ */
+function extractTextFromBlocks(blocks) {
+  if (!blocks) return '';
+
+  const texts = [];
+
+  function extractFromElement(element) {
+    if (!element) return;
+
+    // 直接テキストを持つ要素
+    if (element.type === 'text' && element.text) {
+      texts.push(element.text);
+      return;
+    }
+
+    // mrkdwn形式
+    if (element.type === 'mrkdwn' && element.text) {
+      texts.push(element.text);
+      return;
+    }
+
+    // plain_text形式
+    if (element.type === 'plain_text' && element.text) {
+      texts.push(element.text);
+      return;
+    }
+
+    // section blockのtext
+    if (element.type === 'section') {
+      if (element.text && element.text.text) {
+        texts.push(element.text.text);
+      }
+      if (element.fields) {
+        element.fields.forEach(field => {
+          if (field.text) texts.push(field.text);
+        });
+      }
+    }
+
+    // rich_text block
+    if (element.type === 'rich_text' && element.elements) {
+      element.elements.forEach(extractFromElement);
+    }
+
+    // rich_text_section
+    if (element.type === 'rich_text_section' && element.elements) {
+      element.elements.forEach(extractFromElement);
+    }
+
+    // rich_text_list
+    if (element.type === 'rich_text_list' && element.elements) {
+      element.elements.forEach(extractFromElement);
+    }
+
+    // rich_text_preformatted
+    if (element.type === 'rich_text_preformatted' && element.elements) {
+      element.elements.forEach(extractFromElement);
+    }
+
+    // context block
+    if (element.type === 'context' && element.elements) {
+      element.elements.forEach(extractFromElement);
+    }
+
+    // header block
+    if (element.type === 'header' && element.text && element.text.text) {
+      texts.push(element.text.text);
+    }
+
+    // 子要素を再帰的に処理
+    if (element.elements) {
+      element.elements.forEach(extractFromElement);
+    }
+  }
+
+  // blocksが配列の場合
+  if (Array.isArray(blocks)) {
+    blocks.forEach(extractFromElement);
+  } else {
+    extractFromElement(blocks);
+  }
+
+  return texts.join('\n');
+}
+
+/**
  * 長いメッセージを分割して送信する
  * @param {Object} client - Slack client
  * @param {string} channel - チャンネルID
@@ -99,13 +188,36 @@ const SLACK_MESSAGE_LIMIT = 35000; // Slackの上限は40000、余裕を持た�
 async function sendLongMessage(client, channel, ts, text, threadTs = null) {
   console.log(`[sendLongMessage] Text length: ${text.length}, limit: ${SLACK_MESSAGE_LIMIT}`);
 
+  // Helper: chat.updateが失敗したらpostMessageにフォールバック
+  async function safeUpdate(updateText, isFirst = true) {
+    try {
+      await client.chat.update({
+        channel,
+        ts,
+        text: updateText
+      });
+    } catch (updateErr) {
+      console.warn(`[sendLongMessage] chat.update failed (${updateErr.data?.error || updateErr.message}), falling back to postMessage`);
+      // フォールバック: 新しいメッセージとして送信
+      if (isFirst) {
+        // 最初のメッセージはプレースホルダを削除して新規投稿
+        try {
+          await client.chat.delete({ channel, ts });
+        } catch (delErr) {
+          console.warn('[sendLongMessage] Failed to delete placeholder:', delErr.message);
+        }
+      }
+      await client.chat.postMessage({
+        channel,
+        thread_ts: threadTs || ts,
+        text: updateText
+      });
+    }
+  }
+
   // 短いメッセージはそのまま送信
   if (text.length <= SLACK_MESSAGE_LIMIT) {
-    await client.chat.update({
-      channel,
-      ts,
-      text
-    });
+    await safeUpdate(text);
     return;
   }
 
@@ -131,15 +243,10 @@ async function sendLongMessage(client, channel, ts, text, threadTs = null) {
   }
 
   // 最初のチャンクで元のメッセージを更新
-  await client.chat.update({
-    channel,
-    ts,
-    text: chunks[0] + (chunks.length > 1 ? '\n\n_(続き...)_' : '')
-  });
+  await safeUpdate(chunks[0] + (chunks.length > 1 ? '\n\n_(続き...)_' : ''), true);
 
   // 残りのチャンクは新しいメッセージとして送信
   for (let i = 1; i < chunks.length; i++) {
-    const isLast = i === chunks.length - 1;
     await client.chat.postMessage({
       channel,
       thread_ts: threadTs || ts,
@@ -2052,7 +2159,7 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
   }
 
   try {
-    const { extractTaskFromMessage } = require('./llm-integration');
+    const { extractTasksFromMessage } = require('./llm-integration');
     const GitHubIntegration = require('./github-integration');
     const { getSlackIdToBrainbaseName } = require('./slack-name-resolver');
 
@@ -2316,21 +2423,60 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
     const slackIdToName = await getSlackIdToBrainbaseName();
     const assigneeName = slackIdToName.get(assigneeSlackId) || senderName;
 
-    // LLMでタスク抽出
-    const taskResult = await extractTaskFromMessage(cleanedText, channelName, senderName);
+    // スレッドコンテキストを取得（タスク抽出時の文脈理解用）
+    let threadContext = '';
+    const threadTs = event.thread_ts;
+    if (threadTs) {
+      try {
+        const threadResult = await client.conversations.replies({
+          channel: event.channel,
+          ts: threadTs,
+          limit: 20
+        });
+        if (threadResult.messages && threadResult.messages.length > 1) {
+          const contextMessages = [];
+          for (const msg of threadResult.messages) {
+            if (msg.ts === event.ts) continue;
+            const msgUser = slackIdToName.get(msg.user) || msg.user;
 
-    if (!taskResult) {
-      await client.chat.update({
-        channel: event.channel,
-        ts: processingMsg.ts,
-        text: '💭 タスクとして認識できませんでした。具体的な依頼内容を記載してください。'
-      });
-      return;
+            // blocksからテキストを抽出（議事録などの詳細内容はblocksに格納されている）
+            let msgText = '';
+            if (msg.blocks && msg.blocks.length > 0) {
+              msgText = extractTextFromBlocks(msg.blocks);
+            }
+            // blocksからテキストが取得できなければmsg.textにフォールバック
+            if (!msgText || msgText.trim() === '') {
+              msgText = msg.text || '';
+            }
+            // メンションを削除
+            msgText = msgText.replace(/<@[A-Z0-9]+>/g, '').trim();
+
+            if (msgText) {
+              contextMessages.push(`${msgUser}: ${msgText}`);
+            }
+          }
+          if (contextMessages.length > 0) {
+            threadContext = `\n\n【スレッドの文脈】\n${contextMessages.join('\n\n---\n')}`;
+            logger.info(`Thread context added for task extraction: ${contextMessages.length} messages, total ${threadContext.length} chars`);
+          }
+        }
+      } catch (e) {
+        logger.warn('Failed to get thread context:', e.message);
+      }
     }
 
-    // 配列でない場合は配列に変換
-    const tasks = Array.isArray(taskResult) ? taskResult : [taskResult];
-    const validTasks = tasks.filter(t => t && t.title);
+    // LLMでタスク抽出（スレッドコンテキスト付き、複数タスク対応）
+    const messageWithContext = cleanedText + threadContext;
+    logger.info(`[DEBUG] Thread context length: ${threadContext.length} chars`);
+    if (threadContext.length > 0) {
+      // 最初の1000文字をログに出力（デバッグ用）
+      logger.info(`[DEBUG] Thread context preview: ${threadContext.substring(0, 1000)}...`);
+    }
+    const taskResult = await extractTasksFromMessage(messageWithContext, channelName, senderName, assigneeName);
+    logger.info(`[DEBUG] Task extraction result: ${JSON.stringify(taskResult)}`);
+
+    // extractTasksFromMessageは配列を返す
+    const validTasks = (taskResult || []).filter(t => t && t.title);
 
     if (validTasks.length === 0) {
       await client.chat.update({
@@ -2554,7 +2700,7 @@ app.message(async ({ message, client, logger }) => {
   }
 
   try {
-    const { extractTaskFromMessage } = require('./llm-integration');
+    const { extractTasksFromMessage } = require('./llm-integration');
     const GitHubIntegration = require('./github-integration');
 
     // チャンネル名を取得
@@ -2597,7 +2743,7 @@ app.message(async ({ message, client, logger }) => {
         const threadResult = await client.conversations.replies({
           channel: message.channel,
           ts: threadTs,
-          limit: 10
+          limit: 20
         });
         if (threadResult.messages && threadResult.messages.length > 1) {
           const contextMessages = [];
@@ -2626,11 +2772,14 @@ app.message(async ({ message, client, logger }) => {
       text: '📝 タスクを解析中...'
     });
 
-    // LLMでタスク抽出（スレッドコンテキスト付き）
+    // LLMでタスク抽出（スレッドコンテキスト付き、複数タスク対応）
     const messageWithContext = cleanedText + threadContext;
-    const task = await extractTaskFromMessage(messageWithContext, channelName, senderName);
+    const taskResult = await extractTasksFromMessage(messageWithContext, channelName, senderName, assigneeName);
 
-    if (!task) {
+    // extractTasksFromMessageは配列を返す
+    const validTasks = (taskResult || []).filter(t => t && t.title);
+
+    if (validTasks.length === 0) {
       logger.info('No task extracted from message');
       await client.chat.update({
         channel: message.channel,
@@ -2640,11 +2789,7 @@ app.message(async ({ message, client, logger }) => {
       return;
     }
 
-    // 担当者を設定
-    task.assignee = assigneeName;
-    task.assignee_slack_id = mentionedMemberIds[0];
-
-    logger.info('Extracted task:', JSON.stringify(task, null, 2));
+    logger.info(`Extracted ${validTasks.length} task(s)`);
 
     // Slackメッセージへのリンクを生成
     const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
@@ -2656,47 +2801,78 @@ app.message(async ({ message, client, logger }) => {
       thread_ts: message.ts
     };
 
-    // GitHub APIでタスクを追記
+    // GitHub APIで各タスクを追記
     const github = new GitHubIntegration();
-    const result = await github.appendTask(task, slackLink, slackContext);
+    const results = [];
 
-    if (result.success) {
-      logger.info('Task appended successfully:', result);
+    for (const task of validTasks) {
+      // 担当者を設定
+      task.assignee = assigneeName;
+      task.assignee_slack_id = mentionedMemberIds[0];
+      task.requester = senderName;
 
-      // サポット風UIでメッセージを生成
-      const { createTaskMessageBlocks } = require('./task-ui');
-      const taskBlocks = createTaskMessageBlocks({
-        taskId: result.taskId,
-        title: task.title,
-        requester: senderName,
-        requesterSlackId: message.user,
-        assignee: task.assignee,
-        assigneeSlackId: task.assignee_slack_id,
-        priority: task.priority || 'medium',
-        due: task.due,
-        slackLink
-      });
-
-      // コミットリンクを追加
-      taskBlocks.push({
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: `📋 <${result.commitUrl}|_tasks/index.md に追記> | ID: \`${result.taskId}\``
-          }
-        ]
-      });
-
-      await client.chat.update({
-        channel: message.channel,
-        ts: processingMsg.ts,
-        blocks: taskBlocks,
-        text: `✅ タスク「${task.title}」を登録しました`
-      });
-    } else {
-      throw new Error('Failed to append task to GitHub');
+      logger.info('Appending task:', task.title);
+      const result = await github.appendTask(task, slackLink, slackContext);
+      if (result.success) {
+        results.push({ task, result });
+        logger.info('Task appended:', result.taskId);
+      }
     }
+
+    if (results.length === 0) {
+      throw new Error('Failed to append any tasks to GitHub');
+    }
+
+    // 複数タスク用のブロック生成
+    const blocks = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `📋 *タスク整理* (${results.length}件)\n「...」からそれぞれ編集やキャンセルができます`
+        }
+      },
+      { type: "divider" }
+    ];
+
+    for (const { task, result } of results) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*<${result.fileUrl}|【${task.project_id || 'TASK'}】${task.title}>*\n期限: ${task.due || '未設定'}　担当: <@${task.assignee_slack_id}>`
+        },
+        accessory: {
+          type: "overflow",
+          options: [
+            { text: { type: "plain_text", text: "✅ 完了" }, value: `complete_${result.taskId}` },
+            { text: { type: "plain_text", text: "📝 編集" }, value: `edit_${result.taskId}` },
+            { text: { type: "plain_text", text: "❌ キャンセル" }, value: `cancel_${result.taskId}` }
+          ],
+          action_id: `task_action_${result.taskId}`
+        }
+      });
+    }
+
+    // 最後のコミットURLを表示
+    const lastResult = results[results.length - 1].result;
+    blocks.push(
+      { type: "divider" },
+      {
+        type: "context",
+        elements: [{
+          type: "mrkdwn",
+          text: `📋 <${lastResult.commitUrl}|_tasks/index.md に追記完了>`
+        }]
+      }
+    );
+
+    await client.chat.update({
+      channel: message.channel,
+      ts: processingMsg.ts,
+      blocks: blocks,
+      text: `✅ ${results.length}件のタスクを登録しました`
+    });
 
   } catch (error) {
     logger.error('Error processing task intake:', error);

@@ -32,5 +32,10 @@
   "homepage": "https://github.com/sintariran/mana#readme",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.946.0",
+    "@aws-sdk/lib-dynamodb": "^3.946.0",
+    "js-yaml": "^4.1.1"
   }
 }
