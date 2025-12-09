@@ -85,6 +85,69 @@ process.on('SIGTERM', () => {
   clearInterval(cleanupInterval);
 });
 
+// --- Slack Message Helpers ---
+const SLACK_MESSAGE_LIMIT = 35000; // Slackの上限は40000、余裕を持たせる
+
+/**
+ * 長いメッセージを分割して送信する
+ * @param {Object} client - Slack client
+ * @param {string} channel - チャンネルID
+ * @param {string} ts - メッセージのタイムスタンプ（最初のメッセージを更新）
+ * @param {string} text - 送信するテキスト
+ * @param {string} threadTs - スレッドのタイムスタンプ（オプション）
+ */
+async function sendLongMessage(client, channel, ts, text, threadTs = null) {
+  console.log(`[sendLongMessage] Text length: ${text.length}, limit: ${SLACK_MESSAGE_LIMIT}`);
+
+  // 短いメッセージはそのまま送信
+  if (text.length <= SLACK_MESSAGE_LIMIT) {
+    await client.chat.update({
+      channel,
+      ts,
+      text
+    });
+    return;
+  }
+
+  // 長いメッセージは分割
+  const chunks = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= SLACK_MESSAGE_LIMIT) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // 改行で区切れる場所を探す
+    let splitIndex = remaining.lastIndexOf('\n', SLACK_MESSAGE_LIMIT);
+    if (splitIndex === -1 || splitIndex < SLACK_MESSAGE_LIMIT * 0.5) {
+      // 改行が見つからないか遠すぎる場合は強制分割
+      splitIndex = SLACK_MESSAGE_LIMIT;
+    }
+
+    chunks.push(remaining.substring(0, splitIndex));
+    remaining = remaining.substring(splitIndex).trimStart();
+  }
+
+  // 最初のチャンクで元のメッセージを更新
+  await client.chat.update({
+    channel,
+    ts,
+    text: chunks[0] + (chunks.length > 1 ? '\n\n_(続き...)_' : '')
+  });
+
+  // 残りのチャンクは新しいメッセージとして送信
+  for (let i = 1; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    await client.chat.postMessage({
+      channel,
+      thread_ts: threadTs || ts,
+      text: `_(続き ${i + 1}/${chunks.length})_\n\n${chunks[i]}`
+    });
+  }
+}
+
 // --- Version Logging ---
 let version = 'unknown';
 try {
@@ -2133,7 +2196,19 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
             threadId: event.ts,
             teamId: context.teamId || event.team,
             conversationHistory,  // 会話履歴を渡す
-            projectId: projectId.replace('proj_', '')  // チャンネルから解決したプロジェクトID
+            projectId: projectId.replace('proj_', ''),  // チャンネルから解決したプロジェクトID
+            // 進捗表示コールバック（ツール実行時にメッセージを更新）
+            onProgress: async (progressText) => {
+              try {
+                await client.chat.update({
+                  channel: event.channel,
+                  ts: processingMsg.ts,
+                  text: progressText
+                });
+              } catch (updateErr) {
+                logger.warn('Progress update failed:', updateErr.message);
+              }
+            }
           });
         } catch (e) {
           // Mastra未ロード時は既存のBedrockを使用
@@ -2194,11 +2269,8 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
         });
         logger.info(`Conversation saved: ${projectId}:${userId} (assistant response)`);
 
-        await client.chat.update({
-          channel: event.channel,
-          ts: processingMsg.ts,
-          text: response
-        });
+        // 長いメッセージは分割して送信
+        await sendLongMessage(client, event.channel, processingMsg.ts, response, event.ts);
         return;
       } catch (pmError) {
         logger.error('AI PM error:', pmError);

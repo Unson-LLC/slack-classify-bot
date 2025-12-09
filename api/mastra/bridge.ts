@@ -269,6 +269,19 @@ export const extractTasks = extractTaskFromMessage;
  * ワークスペースのManaエージェントに問い合わせる
  * Team IDからワークスペースを特定し、スコープ内のコンテキストのみアクセス
  */
+// ツール名を日本語で表示
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  'list_source_files': '📂 ファイル一覧を取得',
+  'read_source_file': '📄 ファイルを読み取り',
+  'search_source_code': '🔍 コードを検索',
+  'web_search': '🌐 Web検索',
+  'web_extract': '📰 Webページを解析',
+  'airtable_list_records': '📊 Airtableからデータ取得',
+  'airtable_search_records': '🔎 Airtableを検索',
+  'gmail_search_messages': '📧 メールを検索',
+  'gmail_get_message': '📧 メールを取得',
+};
+
 export async function askMana(
   question: string,
   options: {
@@ -278,6 +291,7 @@ export async function askMana(
     senderName?: string;
     includeContext?: boolean;
     projectId?: string;        // チャンネルから解決したプロジェクトID
+    onProgress?: (message: string) => Promise<void>;  // 進捗コールバック
   }
 ): Promise<string> {
   // 1. Team IDからワークスペースとManaを特定
@@ -409,10 +423,48 @@ Airtableツール使用時は必ずこのBase IDを使用してください。�
       setCurrentProjectId(`proj_${projectId}`);
     }
 
+    // 進捗表示用のスロットリング（2秒に1回まで）
+    let lastProgressUpdate = 0;
+    const PROGRESS_THROTTLE_MS = 2000;
+
     // ツール呼び出しを有効化（auto = LLMが必要に応じてツールを使う）
     const result = await agent.generate(prompt, {
       toolChoice: 'auto',
-      maxSteps: 5, // ツール呼び出しの最大ステップ数
+      maxSteps: 15, // ツール呼び出しの最大ステップ数（ソースコード調査には複数ステップ必要）
+      onStepFinish: options.onProgress ? async (step: any) => {
+        const now = Date.now();
+        if (now - lastProgressUpdate < PROGRESS_THROTTLE_MS) {
+          return; // スロットリング
+        }
+
+        // ツール呼び出しがあれば進捗を表示
+        if (step.toolCalls && step.toolCalls.length > 0) {
+          const toolCall = step.toolCalls[0];
+          // Mastraのtool call構造: { type, runId, from, payload: { toolCallId, toolName, args } }
+          const payload = toolCall.payload || toolCall;
+          const toolName = payload.toolName || payload.name || toolCall.toolName || toolCall.name;
+          console.log('[onStepFinish] toolName:', toolName, 'from payload:', payload.toolName);
+          const displayName = TOOL_DISPLAY_NAMES[toolName] || `🔧 ${toolName}`;
+
+          // ツールの引数から追加情報を取得
+          const args = payload.args || toolCall.args || {};
+          let detail = '';
+          if (args.filePath) {
+            detail = `: \`${args.filePath}\``;
+          } else if (args.path) {
+            detail = `: \`${args.path}\``;
+          } else if (args.query) {
+            detail = `: "${args.query}"`;
+          }
+
+          try {
+            await options.onProgress!(`${displayName}${detail}...`);
+            lastProgressUpdate = now;
+          } catch (e) {
+            console.warn('Progress update failed:', e);
+          }
+        }
+      } : undefined,
     });
     return result.text;
   } catch (error) {
@@ -431,6 +483,7 @@ export async function askProjectPM(
     senderName?: string;
     includeContext?: boolean;
     teamId?: string;
+    onProgress?: (message: string) => Promise<void>;  // 進捗コールバック
   }
 ): Promise<string> {
   // teamIdがあればaskManaを使用、なければデフォルトで動作
@@ -441,6 +494,7 @@ export async function askProjectPM(
     senderName: options.senderName,
     includeContext: options.includeContext,
     projectId: options.projectId,  // チャンネルから解決したプロジェクトID
+    onProgress: options.onProgress,  // 進捗コールバック
   });
 }
 
