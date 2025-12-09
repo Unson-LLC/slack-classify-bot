@@ -1,16 +1,15 @@
-// mastra/tools/source-code.ts
-// ソースコード読み取りツール - S3からプロジェクトのソースコードを取得
+// mastra/tools/source-code-efs.ts
+// ソースコード読み取りツール - EFS + ripgrep 版（Search Lambda経由）
 
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
-import path from 'path';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
-const SOURCE_BUCKET = process.env.SOURCE_BUCKET || 'brainbase-source-593793022993';
+const lambda = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const SEARCH_LAMBDA_NAME = process.env.SEARCH_LAMBDA_NAME || 'mana-search';
 
 // グローバル変数でプロジェクトIDを保持（askManaから設定される）
 let currentProjectId: string | null = null;
@@ -22,10 +21,10 @@ export function setCurrentProjectId(projectId: string) {
 
 // Helper: Get project's source repo config from DynamoDB
 async function getSourceRepoConfig(projectId: string) {
-  // Use require for CommonJS module
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const ProjectRepository = require(process.cwd() + '/project-repository.js');
   const projectRepo = new ProjectRepository();
+  console.log(`Fetching project from DynamoDB: ${projectId}`);
   const project = await projectRepo.getProjectById(projectId);
 
   if (!project) {
@@ -43,9 +42,22 @@ async function getSourceRepoConfig(projectId: string) {
   };
 }
 
-// Helper: Build S3 key prefix
-function buildS3Prefix(owner: string, repo: string, branch: string): string {
-  return `${owner}/${repo}/${branch}/`;
+// Helper: Invoke search lambda
+async function invokeSearchLambda(payload: Record<string, unknown>): Promise<any> {
+  const command = new InvokeCommand({
+    FunctionName: SEARCH_LAMBDA_NAME,
+    Payload: JSON.stringify(payload),
+  });
+
+  const response = await lambda.send(command);
+
+  if (response.FunctionError) {
+    const errorPayload = JSON.parse(new TextDecoder().decode(response.Payload));
+    throw new Error(`Search Lambda error: ${errorPayload.errorMessage || 'Unknown error'}`);
+  }
+
+  const result = JSON.parse(new TextDecoder().decode(response.Payload));
+  return result;
 }
 
 /**
@@ -63,7 +75,6 @@ export const listSourceFilesTool = createTool({
     const { path: dirPath, pattern, maxFiles } = input;
 
     try {
-      // Get project from global state
       const projectId = currentProjectId;
       if (!projectId) {
         return {
@@ -75,40 +86,29 @@ export const listSourceFilesTool = createTool({
       console.log(`[source-code] list_source_files called for project: ${projectId}`);
 
       const sourceConfig = await getSourceRepoConfig(projectId);
-      const prefix = buildS3Prefix(sourceConfig.owner, sourceConfig.repo, sourceConfig.branch);
-      const searchPrefix = dirPath ? `${prefix}${dirPath}` : prefix;
 
-      // List objects from S3
-      const command = new ListObjectsV2Command({
-        Bucket: SOURCE_BUCKET,
-        Prefix: searchPrefix,
-        MaxKeys: maxFiles || 100,
+      const result = await invokeSearchLambda({
+        action: 'list',
+        owner: sourceConfig.owner,
+        repo: sourceConfig.repo,
+        branch: sourceConfig.branch,
+        path: dirPath,
+        pattern,
+        maxFiles: maxFiles || 100,
       });
 
-      const response = await s3.send(command);
-      let files = (response.Contents || []).map((obj) => ({
-        path: obj.Key!.replace(prefix, ''),
-        size: obj.Size,
-        lastModified: obj.LastModified,
-      }));
-
-      // Filter by pattern if specified
-      if (pattern) {
-        const regex = new RegExp(pattern.replace(/\*/g, '.*').replace(/\?/g, '.'));
-        files = files.filter((f) => regex.test(path.basename(f.path)));
+      if (!result.success) {
+        return result;
       }
-
-      // Filter out directories and index files
-      files = files.filter((f) => !f.path.endsWith('/') && f.path !== '_index.json');
 
       return {
         success: true,
         project: `${sourceConfig.owner}/${sourceConfig.repo}`,
         branch: sourceConfig.branch,
         directory: dirPath || '/',
-        files: files,
-        count: files.length,
-        truncated: response.IsTruncated || false,
+        files: result.files,
+        count: result.count,
+        truncated: result.truncated || false,
       };
     } catch (error) {
       console.error('[source-code] list_source_files error:', error);
@@ -135,7 +135,6 @@ export const readSourceFileTool = createTool({
     const { filePath, maxLines, startLine } = input;
 
     try {
-      // Get project from global state
       const projectId = currentProjectId;
       if (!projectId) {
         return {
@@ -147,31 +146,19 @@ export const readSourceFileTool = createTool({
       console.log(`[source-code] read_source_file called for: ${filePath}`);
 
       const sourceConfig = await getSourceRepoConfig(projectId);
-      const s3Key = `${buildS3Prefix(sourceConfig.owner, sourceConfig.repo, sourceConfig.branch)}${filePath}`;
 
-      // Get file from S3
-      const command = new GetObjectCommand({
-        Bucket: SOURCE_BUCKET,
-        Key: s3Key,
+      const result = await invokeSearchLambda({
+        action: 'read',
+        owner: sourceConfig.owner,
+        repo: sourceConfig.repo,
+        branch: sourceConfig.branch,
+        filePath,
+        maxLines,
+        startLine,
       });
 
-      const response = await s3.send(command);
-      let content = await response.Body?.transformToString('utf-8') || '';
-
-      // Handle line range if specified
-      if (startLine || maxLines) {
-        const lines = content.split('\n');
-        const start = (startLine || 1) - 1;
-        const end = maxLines ? start + maxLines : lines.length;
-        content = lines.slice(start, end).join('\n');
-      }
-
-      // Truncate if too large (> 50KB)
-      const MAX_SIZE = 50 * 1024;
-      let truncated = false;
-      if (content.length > MAX_SIZE) {
-        content = content.substring(0, MAX_SIZE);
-        truncated = true;
+      if (!result.success) {
+        return result;
       }
 
       return {
@@ -179,19 +166,13 @@ export const readSourceFileTool = createTool({
         project: `${sourceConfig.owner}/${sourceConfig.repo}`,
         branch: sourceConfig.branch,
         filePath: filePath,
-        content: content,
-        size: response.ContentLength,
-        truncated: truncated,
-        lineRange: startLine || maxLines ? { start: startLine || 1, maxLines } : null,
+        content: result.content,
+        size: result.size,
+        truncated: result.truncated,
+        lineRange: result.lineRange,
       };
     } catch (error: any) {
       console.error('[source-code] read_source_file error:', error);
-      if (error.name === 'NoSuchKey') {
-        return {
-          success: false,
-          error: `File not found: ${filePath}`,
-        };
-      }
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -201,11 +182,11 @@ export const readSourceFileTool = createTool({
 });
 
 /**
- * Search for text in source files
+ * Search for text in source files using ripgrep
  */
 export const searchSourceCodeTool = createTool({
   id: 'search_source_code',
-  description: 'ソースコード内をキーワード検索する。ファイル名と行番号を返す。',
+  description: 'ソースコード内をキーワード検索する（ripgrepで高速検索）。ファイル名と行番号を返す。',
   inputSchema: z.object({
     query: z.string().describe('検索キーワードまたは正規表現'),
     path: z.string().optional().describe('検索対象ディレクトリ（例: "src/"）'),
@@ -228,65 +209,29 @@ export const searchSourceCodeTool = createTool({
       console.log(`[source-code] search_source_code called for: ${query}`);
 
       const sourceConfig = await getSourceRepoConfig(projectId);
-      const prefix = buildS3Prefix(sourceConfig.owner, sourceConfig.repo, sourceConfig.branch);
-      const searchPrefix = dirPath ? `${prefix}${dirPath}` : prefix;
 
-      // First, list files
-      const listCommand = new ListObjectsV2Command({
-        Bucket: SOURCE_BUCKET,
-        Prefix: searchPrefix,
-        MaxKeys: 500,
+      const result = await invokeSearchLambda({
+        action: 'search',
+        owner: sourceConfig.owner,
+        repo: sourceConfig.repo,
+        branch: sourceConfig.branch,
+        query,
+        path: dirPath,
+        filePattern,
+        maxResults: maxResults || 20,
+        caseSensitive: caseSensitive || false,
       });
 
-      const listResponse = await s3.send(listCommand);
-      let files = (listResponse.Contents || [])
-        .filter((obj) => !obj.Key!.endsWith('/') && !obj.Key!.endsWith('_index.json'))
-        .map((obj) => obj.Key!);
-
-      // Filter by file pattern
-      if (filePattern) {
-        const regex = new RegExp(filePattern.replace(/\*/g, '.*').replace(/\?/g, '.'));
-        files = files.filter((f) => regex.test(path.basename(f)));
-      }
-
-      // Search in files
-      const results: Array<{ file: string; line: number; content: string }> = [];
-      const searchRegex = caseSensitive ? new RegExp(query, 'g') : new RegExp(query, 'gi');
-
-      for (const fileKey of files) {
-        if (results.length >= (maxResults || 20)) break;
-
-        try {
-          const getCommand = new GetObjectCommand({ Bucket: SOURCE_BUCKET, Key: fileKey });
-          const fileResponse = await s3.send(getCommand);
-          const content = await fileResponse.Body?.transformToString('utf-8') || '';
-          const lines = content.split('\n');
-
-          for (let i = 0; i < lines.length; i++) {
-            if (results.length >= (maxResults || 20)) break;
-
-            if (searchRegex.test(lines[i])) {
-              results.push({
-                file: fileKey.replace(prefix, ''),
-                line: i + 1,
-                content: lines[i].trim().substring(0, 200),
-              });
-              searchRegex.lastIndex = 0; // Reset regex state
-            }
-          }
-        } catch (e) {
-          // Skip files that can't be read
-          continue;
-        }
+      if (!result.success) {
+        return result;
       }
 
       return {
         success: true,
         project: `${sourceConfig.owner}/${sourceConfig.repo}`,
         query: query,
-        results: results,
-        count: results.length,
-        searchedFiles: files.length,
+        results: result.results,
+        count: result.count,
       };
     } catch (error) {
       console.error('[source-code] search_source_code error:', error);

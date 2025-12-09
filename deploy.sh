@@ -36,8 +36,8 @@ rm -f "$API_DIR/$ZIP_FILE"
 echo "      - Done."
 
 # 2. Install Dependencies
-echo "[2/6] Installing production dependencies..."
-(cd "$API_DIR" && npm install --omit=dev)
+echo "[2/6] Installing dependencies..."
+(cd "$API_DIR" && npm install)
 echo "      - Done."
 
 # 2.5 Module Load Check
