@@ -3,6 +3,7 @@
 
 import { Agent } from '@mastra/core/agent';
 import { defaultModel } from '../../config/llm-provider.js';
+import { memory } from '../../config/memory.js';
 import { githubAppendTaskTool } from '../../tools/github.js';
 
 const instructions = `あなたはタスク管理アシスタントです。会話やメッセージからタスクを抽出し、適切に管理します。
@@ -48,6 +49,7 @@ export const createTaskAgent = () =>
     name: 'Task Agent',
     instructions,
     model: defaultModel,
+    memory,
     tools: {
       github_append_task: githubAppendTaskTool,
     },

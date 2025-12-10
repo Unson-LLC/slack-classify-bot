@@ -3,6 +3,7 @@
 
 import { Agent } from '@mastra/core/agent';
 import { defaultModel } from '../../config/llm-provider.js';
+import { memory } from '../../config/memory.js';
 
 const instructions = `あなたは会議アシスタントです。文字起こしデータから議事録を生成し、Next Actionを抽出します。
 
@@ -38,4 +39,5 @@ export const createMeetingAgent = () =>
     name: 'Meeting Agent',
     instructions,
     model: defaultModel,
+    memory,
   });

@@ -6,6 +6,7 @@
 
 import { Agent } from '@mastra/core/agent';
 import { defaultModel } from '../config/llm-provider.js';
+import { memory } from '../config/memory.js';
 import { WorkspaceConfig } from '../config/workspaces.js';
 import { githubAppendTaskTool, githubCommitMinutesTool } from '../tools/github.js';
 import { slackPostMessageTool, slackAddReactionTool } from '../tools/slack.js';
@@ -163,6 +164,7 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
     name: `${config.name} Mana`,
     instructions,
     model: defaultModel,
+    memory,
     tools: {
       // github_append_task は別システム（Task Intake）が処理するため除外
       github_commit_minutes: githubCommitMinutesTool,
