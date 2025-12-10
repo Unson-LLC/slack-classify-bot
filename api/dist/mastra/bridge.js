@@ -271,7 +271,8 @@ export async function askMana(question, options) {
         console.log(`[INFO] Project context: ${projectId} (from ${options.projectId ? 'channel mapping' : 'keyword detection'})`);
     }
     // 4. プロジェクトがスコープ内かチェック
-    if (projectId && workspace) {
+    // 'general'はプロジェクト固有の情報を必要としない雑談等のため、スキップ
+    if (projectId && projectId !== 'general' && workspace) {
         if (!canAccessProject(workspace, `proj_${projectId}`)) {
             console.warn(`[越権] ${workspace.id}Mana cannot access project ${projectId}`);
             return `申し訳ありませんが、${projectId}プロジェクトの情報にはアクセス権限がありません。`;
