@@ -11,6 +11,7 @@ const SlackArchive = require('./slack-archive');
 const { generateFollowupMessage, formatMinutesForSlack } = require('./llm-integration');
 const { getInstance: getConversationMemory } = require('./conversation-memory');
 const { getProjectIdByChannel } = require('./channel-project-resolver');
+const { isImageFile, downloadAndEncodeImage, analyzeImage } = require('./image-recognition');
 
 // Lambda client for async self-invocation
 const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -2195,6 +2196,58 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
     if (isQuestion) {
       logger.info('Question detected, routing to Project AI PM');
 
+      // --- 画像認識処理 ---
+      // 画像ファイルが添付されている場合は画像認識モードに
+      if (event.files && event.files.length > 0) {
+        const imageFiles = event.files.filter(isImageFile);
+        if (imageFiles.length > 0) {
+          logger.info(`Image files detected: ${imageFiles.length}`);
+
+          const processingMsg = await client.chat.postMessage({
+            channel: event.channel,
+            thread_ts: event.ts,
+            text: '🖼️ 画像を解析中...'
+          });
+
+          try {
+            // 最初の画像を処理（複数画像は今後対応）
+            const imageFile = imageFiles[0];
+            const botToken = process.env.SLACK_BOT_TOKEN;
+
+            logger.info(`Downloading image: ${imageFile.name} (${imageFile.mimetype})`);
+            const imageData = await downloadAndEncodeImage(imageFile, botToken);
+
+            logger.info('Analyzing image with Claude Vision...');
+            const prompt = cleanedText || 'この画像について説明してください。';
+            const analysis = await analyzeImage(imageData, prompt);
+
+            if (analysis) {
+              await client.chat.update({
+                channel: event.channel,
+                ts: processingMsg.ts,
+                text: `🖼️ *画像解析結果*\n\n${analysis}`
+              });
+            } else {
+              await client.chat.update({
+                channel: event.channel,
+                ts: processingMsg.ts,
+                text: '画像を解析できませんでした。'
+              });
+            }
+            return;
+          } catch (imgError) {
+            logger.error('Image recognition error:', imgError);
+            await client.chat.update({
+              channel: event.channel,
+              ts: processingMsg.ts,
+              text: `画像の解析中にエラーが発生しました: ${imgError.message}`
+            });
+            return;
+          }
+        }
+      }
+      // --- End of 画像認識処理 ---
+
       // 処理中メッセージ
       const processingMsg = await client.chat.postMessage({
         channel: event.channel,
@@ -2253,7 +2306,20 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
       let projectId = await getProjectIdByChannel(event.channel);
       logger.info(`Channel ${event.channel} mapped to project: ${projectId}`);
 
-      // 2. チャンネルで特定できない場合は質問文から検出
+      // 2. チャンネルで特定できない場合はワークスペースのデフォルトプロジェクトを使用
+      const teamId = context.teamId || event.team;
+      if (projectId === 'general' && teamId) {
+        const workspaceDefaultProjects = {
+          'T08EUJKQY07': 'salestailor',  // SalesTailorワークスペース
+          'T07A9J3PEMB': 'techknight',   // TechKnightワークスペース
+        };
+        if (workspaceDefaultProjects[teamId]) {
+          projectId = workspaceDefaultProjects[teamId];
+          logger.info(`Using workspace default project: ${projectId} for team ${teamId}`);
+        }
+      }
+
+      // 3. それでも特定できない場合は質問文から検出
       const textLower = cleanedText.toLowerCase();
       if (projectId === 'general') {
         const projectKeywords = {
