@@ -680,7 +680,31 @@ async function extractTasksFromMessage(message, channelName = '', senderName = '
 
   const modelId = resolveModelId();
 
+  // 現在日付と曜日を取得
+  const today = new Date();
+  const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+  const todayStr = today.toISOString().split('T')[0];
+  const todayDay = dayNames[today.getDay()];
+
+  // 今週・来週の各曜日の日付を計算
+  const getDateForDay = (targetDay, preferNextWeek = false) => {
+    const dayIndex = dayNames.indexOf(targetDay);
+    if (dayIndex === -1) return null;
+    const todayIndex = today.getDay();
+    let diff = dayIndex - todayIndex;
+    if (diff < 0 || (diff === 0 && preferNextWeek)) diff += 7;
+    const targetDate = new Date(today);
+    targetDate.setDate(today.getDate() + diff);
+    return targetDate.toISOString().split('T')[0];
+  };
+
+  const weekDates = dayNames.map(day => `${day}曜→${getDateForDay(day)}`).join(', ');
+
   const prompt = `あなたはタスク抽出AIです。以下のSlackメッセージからタスク情報を抽出してJSON形式で出力してください。
+
+# 現在日時
+- 今日: ${todayStr}（${todayDay}曜日）
+- 曜日→日付変換: ${weekDates}
 
 # メッセージ情報
 - チャンネル: ${channelName || '不明'}
@@ -697,12 +721,20 @@ async function extractTasksFromMessage(message, channelName = '', senderName = '
     "title": "タスクの簡潔なタイトル（30文字以内）",
     "project_id": "プロジェクトID（チャンネル名から推測、不明ならgeneral）",
     "priority": "high/medium/low（依頼の緊急度から判断）",
-    "due": "期限（YYYY-MM-DD形式、明示されていなければnull）",
+    "due": "期限（YYYY-MM-DD形式）",
     "context": "タスクの背景・詳細（元のメッセージを要約）",
     "requester": "依頼者名"
   }
 ]
 \`\`\`
+
+# 期限（due）の抽出ルール【重要】
+- 「木曜」「金曜日」「来週月曜」などの曜日表現 → 上記の曜日→日付変換を使ってYYYY-MM-DD形式に変換
+- 「明日」→ 今日+1日、「明後日」→ 今日+2日
+- 「来週」が付く場合 → 該当曜日の+7日
+- 「今週中」「週内」→ 今週金曜日
+- 「〜までに仕上げる」「〜に確認」など、期限を示唆する表現があれば積極的に日付を設定
+- 本当に期限の手がかりがない場合のみnull
 
 # プロジェクトID候補
 - salestailor: SalesTailor関連
@@ -745,10 +777,19 @@ async function extractTasksFromMessage(message, channelName = '', senderName = '
    - 文脈に複数のタスクがある場合、すべて抽出して配列で返す
    - 最大10件まで
 
-3. **文脈がない場合のみ**
+3. **タスク粒度ルール【重要】**
+   - 同一目的に向かう作業フローは**1つのタスク**にまとめる
+   - 「〜をまとめて→〜を仕上げる」「〜を作成して→〜でレビュー」など、段階的な作業は分割しない
+   - 中間ステップ（下書き、確認、レビュー等）はcontextに記載
+   - 例: 「構成をまとめて金曜に動画を仕上げる」
+     → ❌ NG: [{title: "構成をまとめる"}, {title: "動画を仕上げる"}]
+     → ✅ OK: [{title: "展示会用デモ動画を仕上げる", due: "金曜日付", context: "木曜MTGで構成確認→金曜仕上げ"}]
+   - 独立した別目的のタスクのみ分割する（例: 「レポート作成」と「別件の見積もり」）
+
+4. **文脈がない場合のみ**
    - 【スレッドの文脈】がない場合に限り、依頼文そのものをタスク内容として解釈
 
-4. **必ず配列を返す**
+5. **必ず配列を返す**
    - タスクがなくても空配列 [] を返す
    - nullや単一オブジェクトではなく、必ず配列形式
 `;
