@@ -8,11 +8,11 @@
  * - airtable-integration.js: Being replaced by this class
  */
 
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 
-const dynamodb = new AWS.DynamoDB.DocumentClient({
-  region: process.env.AWS_REGION || 'us-east-1'
-});
+const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const dynamodb = DynamoDBDocumentClient.from(client);
 
 class ProjectRepository {
   constructor() {
@@ -42,7 +42,7 @@ class ProjectRepository {
         }
       };
 
-      const result = await dynamodb.scan(params).promise();
+      const result = await dynamodb.send(new ScanCommand(params));
       const projects = result.Items || [];
 
       projects.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -78,7 +78,7 @@ class ProjectRepository {
         }
       };
 
-      const result = await dynamodb.get(params).promise();
+      const result = await dynamodb.send(new GetCommand(params));
       return result.Item || null;
 
     } catch (error) {
@@ -111,7 +111,7 @@ class ProjectRepository {
         }
       };
 
-      const result = await dynamodb.scan(params).promise();
+      const result = await dynamodb.send(new ScanCommand(params));
       return result.Items && result.Items.length > 0 ? result.Items[0] : null;
 
     } catch (error) {
@@ -179,7 +179,7 @@ class ProjectRepository {
         Item: project
       };
 
-      await dynamodb.put(params).promise();
+      await dynamodb.send(new PutCommand(params));
 
       this.projectsCache = null;
       this.projectsCacheTime = null;
@@ -207,7 +207,7 @@ class ProjectRepository {
         }
       };
 
-      await dynamodb.update(params).promise();
+      await dynamodb.send(new UpdateCommand(params));
 
       this.projectsCache = null;
       this.projectsCacheTime = null;

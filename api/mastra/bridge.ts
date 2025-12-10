@@ -166,7 +166,7 @@ ${text.substring(0, 180000)}
 `;
 
   try {
-    const result = await agent.generate(prompt);
+    const result = await (agent as any).generateLegacy(prompt);
     return result.text;
   } catch (error) {
     console.error('Mastra summarizeText error:', error);
@@ -237,7 +237,7 @@ JSONのみを出力してください。
 `;
 
   try {
-    const result = await agent.generate(prompt);
+    const result = await (agent as any).generateLegacy(prompt);
     const rawResponse = result.text;
 
     // Parse JSON from response
@@ -429,7 +429,7 @@ Airtableツール使用時は必ずこのBase IDを使用してください。�
     const PROGRESS_THROTTLE_MS = 2000;
 
     // ツール呼び出しを有効化（auto = LLMが必要に応じてツールを使う）
-    const result = await agent.generate(prompt, {
+    const result = await (agent as any).generateLegacy(prompt, {
       toolChoice: 'auto',
       maxSteps: 50, // ツール呼び出しの最大ステップ数（ソースコード調査には複数ステップ必要）
       onStepFinish: options.onProgress ? async (step: any) => {
@@ -579,7 +579,7 @@ ${text.substring(0, 180000)}
 `;
 
   try {
-    const result = await agent.generate(prompt);
+    const result = await (agent as any).generateLegacy(prompt);
     const rawResponse = result.text;
 
     // Parse JSON response

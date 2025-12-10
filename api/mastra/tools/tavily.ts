@@ -2,7 +2,7 @@
 // Tavily Web検索ツール
 
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 
 // Tavily APIクライアント（動的インポート）
 let tavilyClient: any = null;

@@ -7,11 +7,11 @@
  * - processFileUpload.js: Uses deduplication to prevent duplicate file processing
  */
 
-const AWS = require('aws-sdk');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
 
-const dynamodb = new AWS.DynamoDB.DocumentClient({
-  region: process.env.AWS_REGION || 'us-east-1'
-});
+const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const dynamodb = DynamoDBDocumentClient.from(client);
 
 class EventDeduplicationService {
   constructor() {
@@ -35,10 +35,10 @@ class EventDeduplicationService {
     };
 
     try {
-      await dynamodb.put(params).promise();
+      await dynamodb.send(new PutCommand(params));
       return { isNew: true };
     } catch (error) {
-      if (error.code === 'ConditionalCheckFailedException') {
+      if (error.name === 'ConditionalCheckFailedException') {
         return { isNew: false, reason: 'Already processed by another instance' };
       }
       throw error;

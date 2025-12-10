@@ -2,7 +2,7 @@
 // GitHubツール - タスク追加、議事録コミット等
 
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 
 // タスク追加ツール
 export const githubAppendTaskTool = createTool({

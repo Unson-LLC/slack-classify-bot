@@ -2,6 +2,7 @@
 // 会議アシスタントエージェント - 要約・議事録生成
 import { Agent } from '@mastra/core/agent';
 import { defaultModel } from '../../config/llm-provider.js';
+import { memory } from '../../config/memory.js';
 const instructions = `あなたは会議アシスタントです。文字起こしデータから議事録を生成し、Next Actionを抽出します。
 
 ## 役割
@@ -34,5 +35,6 @@ export const createMeetingAgent = () => new Agent({
     name: 'Meeting Agent',
     instructions,
     model: defaultModel,
+    memory,
 });
 //# sourceMappingURL=meeting-agent.js.map

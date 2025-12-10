@@ -145,7 +145,7 @@ ${glossarySection}
 ${text.substring(0, 180000)}
 `;
     try {
-        const result = await agent.generate(prompt);
+        const result = await agent.generateLegacy(prompt);
         return result.text;
     }
     catch (error) {
@@ -202,7 +202,7 @@ JSONのみを出力してください。
 - 内容が短くても必ずJSON形式で出力してください
 `;
     try {
-        const result = await agent.generate(prompt);
+        const result = await agent.generateLegacy(prompt);
         const rawResponse = result.text;
         // Parse JSON from response
         const jsonMatch = rawResponse.match(/\`\`\`json\s*([\s\S]*?)\s*\`\`\`/);
@@ -367,7 +367,7 @@ Airtableツール使用時は必ずこのBase IDを使用してください。�
         let lastProgressUpdate = 0;
         const PROGRESS_THROTTLE_MS = 2000;
         // ツール呼び出しを有効化（auto = LLMが必要に応じてツールを使う）
-        const result = await agent.generate(prompt, {
+        const result = await agent.generateLegacy(prompt, {
             toolChoice: 'auto',
             maxSteps: 50, // ツール呼び出しの最大ステップ数（ソースコード調査には複数ステップ必要）
             onStepFinish: options.onProgress ? async (step) => {
@@ -488,7 +488,7 @@ ${contextSection}
 ${text.substring(0, 180000)}
 `;
     try {
-        const result = await agent.generate(prompt);
+        const result = await agent.generateLegacy(prompt);
         const rawResponse = result.text;
         // Parse JSON response
         const jsonMatch = rawResponse.match(/\`\`\`json\s*([\s\S]*?)\s*\`\`\`/);

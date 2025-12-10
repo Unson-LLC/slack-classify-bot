@@ -1,7 +1,7 @@
 // mastra/tools/gmail.ts
 // Gmail API ツール（Mastra用）- 軽量版
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import { gmail } from '@googleapis/gmail';
 import { OAuth2Client } from 'google-auth-library';
 // OAuth2クライアント（シングルトン）
@@ -333,7 +333,9 @@ export const gmailSendMessageTool = createTool({
 export const gmailListLabelsTool = createTool({
     id: 'gmail_list_labels',
     description: 'Gmailのラベル（フォルダ）一覧を取得します。',
-    inputSchema: z.object({}),
+    inputSchema: z.object({
+        _unused: z.string().optional().describe('未使用のパラメータ（APIの互換性のため）'),
+    }),
     outputSchema: z.object({
         labels: z.array(z.object({
             id: z.string(),

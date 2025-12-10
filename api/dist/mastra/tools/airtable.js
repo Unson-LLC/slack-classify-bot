@@ -1,7 +1,7 @@
 // mastra/tools/airtable.ts
 // Airtable MCP ツール
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 import Airtable from 'airtable';
 import axios from 'axios';
 // Airtable APIクライアント（シングルトン）
@@ -22,7 +22,9 @@ function getAirtableClient() {
 export const airtableListBasesTool = createTool({
     id: 'airtable_list_bases',
     description: 'Airtableで利用可能なBase（データベース）の一覧を取得します。',
-    inputSchema: z.object({}),
+    inputSchema: z.object({
+        _unused: z.string().optional().describe('未使用のパラメータ（APIの互換性のため）'),
+    }),
     outputSchema: z.object({
         bases: z.array(z.object({
             id: z.string(),

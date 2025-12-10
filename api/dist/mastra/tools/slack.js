@@ -1,7 +1,7 @@
 // mastra/tools/slack.ts
 // Slackツール - メッセージ送信、リアクション等
 import { createTool } from '@mastra/core/tools';
-import { z } from 'zod/v4';
+import { z } from 'zod';
 // メッセージ送信ツール
 export const slackPostMessageTool = createTool({
     id: 'slack_post_message',
