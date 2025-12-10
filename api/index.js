@@ -3321,8 +3321,66 @@ app.view(/^task_edit_submit_/, async ({ ack, view, body, client, logger }) => {
   }
 });
 
+// --- Task Overflow Menu Action Handler ---
+// オーバーフローメニュー（...ボタン）からの完了/編集/キャンセル操作
+app.action(/^task_action_/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info('=== TASK OVERFLOW ACTION ===');
+  logger.info('Action:', JSON.stringify(action, null, 2));
+
+  try {
+    const selectedOption = action.selected_option?.value;
+    if (!selectedOption) {
+      logger.warn('No selected option in overflow menu');
+      return;
+    }
+
+    // selected_option.value は "complete_taskId", "edit_taskId", "cancel_taskId" 形式
+    const [actionType, ...taskIdParts] = selectedOption.split('_');
+    const taskId = taskIdParts.join('_');
+
+    logger.info(`Task action: ${actionType}, taskId: ${taskId}`);
+
+    const channel = body.channel?.id;
+    const messageTs = body.message?.ts;
+
+    if (actionType === 'complete') {
+      // タスク完了処理
+      // TODO: GitHub上のタスクステータスを更新する実装
+      await client.chat.postMessage({
+        channel: channel,
+        thread_ts: messageTs,
+        text: `✅ タスク (ID: ${taskId}) を完了しました`
+      });
+      logger.info(`Task ${taskId} marked as complete`);
+    } else if (actionType === 'edit') {
+      // 編集モーダルを開く
+      // TODO: 既存のtask_edit_ハンドラーと同様のモーダルを表示
+      await client.chat.postMessage({
+        channel: channel,
+        thread_ts: messageTs,
+        text: `📝 タスク (ID: ${taskId}) の編集機能は準備中です`
+      });
+      logger.info(`Task ${taskId} edit requested`);
+    } else if (actionType === 'cancel') {
+      // タスクキャンセル処理
+      // TODO: GitHub上のタスクを削除/キャンセル状態にする実装
+      await client.chat.postMessage({
+        channel: channel,
+        thread_ts: messageTs,
+        text: `❌ タスク (ID: ${taskId}) をキャンセルしました`
+      });
+      logger.info(`Task ${taskId} cancelled`);
+    } else {
+      logger.warn(`Unknown task action type: ${actionType}`);
+    }
+  } catch (error) {
+    logger.error('Error handling task overflow action:', error);
+  }
+});
+
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_|open_followup_modal|open_crosspost_selection|crosspost_to_channel_).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_|task_action_|open_followup_modal|open_crosspost_selection|crosspost_to_channel_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);
