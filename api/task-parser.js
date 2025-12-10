@@ -145,6 +145,109 @@ class TaskParser {
       task.status !== 'completed'
     );
   }
+
+  // --- Personal Tasks Methods ---
+
+  /**
+   * ユーザーIDから個人タスクファイルのパスを生成
+   * @param {string} userId - ユーザーID（例: k.sato）
+   * @returns {string} - 個人タスクファイルのパス
+   */
+  getPersonalTasksPath(userId) {
+    if (!userId) {
+      throw new Error('userId is required');
+    }
+    return `_tasks/personal/${userId}.md`;
+  }
+
+  /**
+   * 個人タスクファイルを取得
+   * @param {string} userId - ユーザーID
+   * @returns {Promise<string>} - ファイル内容（存在しない場合は空文字）
+   */
+  async fetchPersonalTasksFile(userId) {
+    const path = this.getPersonalTasksPath(userId);
+    const headers = {
+      'Authorization': `Bearer ${this.token}`,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    };
+
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/repos/${TASKS_REPO}/contents/${path}`,
+        { headers }
+      );
+      return Buffer.from(response.data.content, 'base64').toString('utf-8');
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return '';
+      }
+      console.error('Failed to fetch personal tasks file:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * 個人タスク一覧を取得
+   * @param {string} userId - ユーザーID
+   * @param {Object} options - フィルタオプション
+   * @param {string} options.status - ステータスでフィルタ
+   * @param {string} options.priority - 優先度でフィルタ
+   * @returns {Promise<Array>} - タスク一覧
+   */
+  async getPersonalTasks(userId, options = {}) {
+    const content = await this.fetchPersonalTasksFile(userId);
+    if (!content) {
+      return [];
+    }
+
+    let tasks = this.parseTasksFromContent(content);
+
+    // フィルタ適用
+    if (options.status) {
+      tasks = tasks.filter(task => task.status === options.status);
+    }
+    if (options.priority) {
+      tasks = tasks.filter(task => task.priority === options.priority);
+    }
+
+    return tasks;
+  }
+
+  /**
+   * 未完了の個人タスクを取得
+   * @param {string} userId - ユーザーID
+   * @returns {Promise<Array>} - 未完了タスク一覧
+   */
+  async getPendingPersonalTasks(userId) {
+    const tasks = await this.getPersonalTasks(userId);
+    return tasks.filter(task =>
+      task.status === 'todo' ||
+      task.status === 'pending' ||
+      task.status === 'in-progress'
+    );
+  }
+
+  /**
+   * 期限切れの個人タスクを取得
+   * @param {string} userId - ユーザーID
+   * @returns {Promise<Array>} - 期限切れタスク一覧
+   */
+  async getOverduePersonalTasks(userId) {
+    const tasks = await this.getPersonalTasks(userId);
+    const today = new Date().toISOString().split('T')[0];
+
+    return tasks.filter(task => {
+      if (task.status === 'done' || task.status === 'completed') {
+        return false;
+      }
+      if (task.due && task.due !== 'null' && task.due < today) {
+        return true;
+      }
+      return false;
+    });
+  }
 }
 
 module.exports = TaskParser;

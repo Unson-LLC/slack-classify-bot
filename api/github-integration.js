@@ -1,12 +1,20 @@
 const axios = require('axios');
+const { TaskIdGenerator } = require('./task-id-generator');
+const { AirtableTaskSync } = require('./airtable-task-sync');
 
 class GitHubIntegration {
-  constructor(token = process.env.GITHUB_TOKEN) {
+  constructor(token = process.env.GITHUB_TOKEN, options = {}) {
     if (!token) {
       throw new Error('GITHUB_TOKEN environment variable is not set');
     }
     this.token = token;
     this.baseUrl = 'https://api.github.com';
+
+    // Task ID Generator（DynamoDB atomic counter）
+    this.taskIdGenerator = options.taskIdGenerator || new TaskIdGenerator();
+
+    // Airtable Sync（オプション: 無効化可能）
+    this.airtableSync = options.disableAirtableSync ? null : (options.airtableSync || new AirtableTaskSync());
   }
 
   /**
@@ -227,10 +235,22 @@ ${minutes || '詳細議事録なし'}
     // 現在のファイル内容を取得
     const { content: currentContent, sha } = await this.getFileContent({ owner, repo, branch, path });
 
-    // タスクIDを生成
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
-    const taskId = `SLACK-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
+
+    // 新しいタスクID（T-YYMM-NNN形式）を生成
+    let taskId;
+    let sourceId;
+    try {
+      taskId = await this.taskIdGenerator.generateNextId(now);
+      // 元のSlack IDはsource_idとして保持
+      sourceId = `SLACK-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
+    } catch (error) {
+      // DynamoDBエラー時はフォールバックとして従来形式を使用
+      console.warn('Failed to generate task ID from DynamoDB, using fallback:', error.message);
+      taskId = `SLACK-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
+      sourceId = taskId;
+    }
 
     // 担当者を決定（assigneeがあれば使用、なければkeigo）
     const taskOwner = task.assignee || 'keigo';
@@ -247,9 +267,10 @@ owner_slack_id: ${task.assignee_slack_id || ''}
 ${requesterField}` : `created_at: "${now.toISOString()}"
 ${requesterField}`;
 
-    // タスクをYAML形式でフォーマット
+    // タスクをYAML形式でフォーマット（新フィールド追加）
     const taskEntry = `---
-id: ${taskId}
+task_id: ${taskId}
+source_id: ${sourceId}
 title: ${task.title}
 project_id: ${task.project_id || 'general'}
 status: todo
@@ -280,9 +301,32 @@ ${slackLink ? `- Slack: ${slackLink}` : ''}
       message: `feat: タスク追加 - ${task.title}`
     });
 
+    // Airtableに同期（有効な場合）
+    let airtableResult = null;
+    if (this.airtableSync) {
+      try {
+        const taskData = {
+          task_id: taskId,
+          source_id: sourceId,
+          title: task.title,
+          project_id: task.project_id || 'general',
+          status: 'todo',
+          owner: ownerFormatted,
+          priority: task.priority || 'medium',
+          due: task.due || null
+        };
+        airtableResult = await this.airtableSync.syncTaskToAirtable(taskData);
+      } catch (error) {
+        console.warn('Failed to sync task to Airtable:', error.message);
+        airtableResult = { success: false, error: error.message };
+      }
+    }
+
     return {
       success: true,
       taskId,
+      sourceId,
+      airtableResult,
       ...result
     };
   }
@@ -368,6 +412,131 @@ ${mentionEntry}`;
     return {
       success: true,
       mentionId,
+      ...result
+    };
+  }
+
+  // --- Personal Tasks Methods ---
+
+  /**
+   * ユーザーIDから個人タスクファイルのパスを生成
+   * @param {string} userId - ユーザーID（例: k.sato）
+   * @returns {string} - 個人タスクファイルのパス
+   */
+  getPersonalTasksPath(userId) {
+    if (!userId) {
+      throw new Error('userId is required');
+    }
+    return `_tasks/personal/${userId}.md`;
+  }
+
+  /**
+   * タスクが個人タスクかどうかを判定
+   * @param {Object} task - タスク情報
+   * @returns {boolean} - 個人タスクならtrue
+   */
+  isPersonalTask(task) {
+    if (task.project_id === 'personal') {
+      return true;
+    }
+    if (task.tags && Array.isArray(task.tags) && task.tags.includes('personal')) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 個人タスクを_tasks/personal/{userId}.mdに追加
+   * @param {string} userId - ユーザーID
+   * @param {Object} task - タスク情報
+   * @param {string} task.title - タスクタイトル
+   * @param {string} task.priority - 優先度(high/medium/low)
+   * @param {string|null} task.due - 期限(YYYY-MM-DD)
+   * @param {string} task.context - コンテキスト/背景
+   * @returns {Promise<Object>} - コミット結果
+   */
+  async appendPersonalTask(userId, task) {
+    const owner = 'sintariran';
+    const repo = 'brainbase';
+    const branch = 'main';
+    const path = this.getPersonalTasksPath(userId);
+
+    // 現在のファイル内容を取得
+    const { content: currentContent, sha } = await this.getFileContent({ owner, repo, branch, path });
+
+    // タスクIDを生成
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const taskId = `PERSONAL-${dateStr}-${now.getTime().toString(36).toUpperCase()}`;
+
+    // タスクをYAML形式でフォーマット
+    const taskEntry = `---
+id: ${taskId}
+title: ${task.title}
+project_id: personal
+status: todo
+owner: ${userId}
+priority: ${task.priority || 'medium'}
+due: ${task.due || 'null'}
+tags: [personal]
+links: []
+created_at: "${now.toISOString()}"
+---
+
+- ${dateStr} 個人タスク追加
+${task.context ? `- 背景: ${task.context}` : ''}
+
+`;
+
+    let newContent;
+    if (!currentContent || currentContent.trim() === '') {
+      // ファイルが存在しない場合はテンプレートから作成
+      newContent = `# ${userId} 個人タスク
+
+> このファイルは個人タスク専用です。Airtableには同期されません。
+> チームと共有が必要なタスクは \`_tasks/index.md\` に追加してください。
+
+---
+
+## アクティブタスク
+
+${taskEntry}---
+
+## 完了済みタスク
+
+`;
+    } else {
+      // 「## アクティブタスク」セクションの後に追加
+      const activeTasksMarker = '## アクティブタスク';
+      const activeTasksIndex = currentContent.indexOf(activeTasksMarker);
+
+      if (activeTasksIndex >= 0) {
+        // マーカーの後の改行を探す
+        const insertPosition = currentContent.indexOf('\n', activeTasksIndex) + 1;
+        // 次の行も改行なら、その後に挿入
+        const nextNewline = currentContent.indexOf('\n', insertPosition);
+        const finalPosition = nextNewline >= 0 ? nextNewline + 1 : insertPosition;
+
+        newContent = currentContent.slice(0, finalPosition) + '\n' + taskEntry + currentContent.slice(finalPosition);
+      } else {
+        // マーカーがない場合は先頭に追加
+        newContent = taskEntry + currentContent;
+      }
+    }
+
+    // コミット
+    const result = await this.createOrUpdateFile({
+      owner,
+      repo,
+      branch,
+      path,
+      content: newContent,
+      message: `personal: タスク追加 - ${task.title}`
+    });
+
+    return {
+      success: true,
+      taskId,
       ...result
     };
   }

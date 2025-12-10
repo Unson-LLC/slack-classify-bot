@@ -77,6 +77,7 @@ fi
 # 3. Create Zip Package
 echo "[3/6] Creating deployment package..."
 # Create the zip file in a subshell.
+# Note: node_modules is excluded because dependencies are provided via Lambda Layers
 (cd "$API_DIR" && zip -r "../function.zip" . \
   -x "./package.json" \
   -x "./package-lock.json" \
@@ -102,22 +103,7 @@ echo "[3/6] Creating deployment package..."
   -x "*.md" \
   -x "*.ts" \
   -x "*.map" \
-  -x "./node_modules/@types/*" \
-  -x "./node_modules/aws-sdk/dist/*" \
-  -x "./node_modules/aws-sdk/scripts/*" \
-  -x "./node_modules/@mastra/*" \
-  -x "./node_modules/@ai-sdk/*" \
-  -x "./node_modules/ai/*" \
-  -x "./node_modules/zod/*" \
-  -x "./node_modules/zod-to-json-schema/*" \
-  -x "./node_modules/@opentelemetry/*" \
-  -x "./node_modules/onnxruntime-node/*" \
-  -x "./node_modules/cohere-ai/*" \
-  -x "./node_modules/js-tiktoken/*" \
-  -x "./node_modules/@modelcontextprotocol/*" \
-  -x "./node_modules/@libsql/*" \
-  -x "./node_modules/@redis/*" \
-  -x "./node_modules/@anush008/*" \
+  -x "./node_modules/*" \
   -x "./mastra/*" \
   -x "./layer/*" \
   -x "./*.zip")
