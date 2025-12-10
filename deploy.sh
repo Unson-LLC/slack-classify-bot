@@ -103,7 +103,9 @@ echo "[3/6] Creating deployment package..."
   -x "*.md" \
   -x "*.ts" \
   -x "*.map" \
+  -x "node_modules/*" \
   -x "./node_modules/*" \
+  -x "*/node_modules/*" \
   -x "./mastra/*" \
   -x "./layer/*" \
   -x "./*.zip")
