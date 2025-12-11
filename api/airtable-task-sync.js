@@ -189,6 +189,7 @@ class AirtableTaskSync {
         success: true,
         airtableRecordId: existingRecord.id,
         operation: 'update',
+        recordUrl: result.recordUrl || (result.records && result.records[0]?.recordUrl),
         result
       };
     } else {
@@ -198,6 +199,7 @@ class AirtableTaskSync {
         success: true,
         airtableRecordId: result.id,
         operation: 'create',
+        recordUrl: result.recordUrl,
         result
       };
     }

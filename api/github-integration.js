@@ -322,11 +322,17 @@ ${slackLink ? `- Slack: ${slackLink}` : ''}
       }
     }
 
+    // AirtableレコードURLを抽出
+    const airtableRecordUrl = airtableResult?.success && airtableResult?.recordUrl
+      ? airtableResult.recordUrl
+      : null;
+
     return {
       success: true,
       taskId,
       sourceId,
       airtableResult,
+      airtableRecordUrl,
       ...result
     };
   }

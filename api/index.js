@@ -2600,11 +2600,13 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
     ];
 
     for (const { task, result } of results) {
+      // AirtableのURLを優先、なければGitHubのURL
+      const taskUrl = result.airtableRecordUrl || result.fileUrl;
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*<${result.fileUrl}|【${task.project_id || 'TASK'}】${task.title}>*\n期限: ${task.due || '未設定'}　担当: <@${task.assignee_slack_id}>`
+          text: `*<${taskUrl}|【${task.project_id || 'TASK'}】${task.title}>*\n期限: ${task.due || '未設定'}　担当: <@${task.assignee_slack_id}>`
         },
         accessory: {
           type: "overflow",
@@ -2618,15 +2620,20 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
       });
     }
 
-    // 最後のコミットURLを表示
+    // Airtableに登録完了を表示
     const lastResult = results[results.length - 1].result;
+    const airtableTableUrl = lastResult.airtableRecordUrl
+      ? lastResult.airtableRecordUrl.replace(/\/rec[a-zA-Z0-9]+$/, '')  // レコードIDを除去してテーブルURLに
+      : null;
     blocks.push(
       { type: "divider" },
       {
         type: "context",
         elements: [{
           type: "mrkdwn",
-          text: `📋 <${lastResult.commitUrl}|_tasks/index.md に追記完了>`
+          text: airtableTableUrl
+            ? `📋 <${airtableTableUrl}|Airtable タスクテーブル> に追記完了`
+            : `📋 <${lastResult.commitUrl}|_tasks/index.md に追記完了>`
         }]
       }
     );
@@ -2902,11 +2909,13 @@ app.message(async ({ message, client, logger }) => {
     ];
 
     for (const { task, result } of results) {
+      // AirtableのURLを優先、なければGitHubのURL
+      const taskUrl = result.airtableRecordUrl || result.fileUrl;
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*<${result.fileUrl}|【${task.project_id || 'TASK'}】${task.title}>*\n期限: ${task.due || '未設定'}　担当: <@${task.assignee_slack_id}>`
+          text: `*<${taskUrl}|【${task.project_id || 'TASK'}】${task.title}>*\n期限: ${task.due || '未設定'}　担当: <@${task.assignee_slack_id}>`
         },
         accessory: {
           type: "overflow",
@@ -2920,15 +2929,20 @@ app.message(async ({ message, client, logger }) => {
       });
     }
 
-    // 最後のコミットURLを表示
+    // Airtableに登録完了を表示
     const lastResult = results[results.length - 1].result;
+    const airtableTableUrl = lastResult.airtableRecordUrl
+      ? lastResult.airtableRecordUrl.replace(/\/rec[a-zA-Z0-9]+$/, '')  // レコードIDを除去してテーブルURLに
+      : null;
     blocks.push(
       { type: "divider" },
       {
         type: "context",
         elements: [{
           type: "mrkdwn",
-          text: `📋 <${lastResult.commitUrl}|_tasks/index.md に追記完了>`
+          text: airtableTableUrl
+            ? `📋 <${airtableTableUrl}|Airtable タスクテーブル> に追記完了`
+            : `📋 <${lastResult.commitUrl}|_tasks/index.md に追記完了>`
         }]
       }
     );

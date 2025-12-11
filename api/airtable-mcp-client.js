@@ -11,6 +11,24 @@ const AIRTABLE_TASKS_TABLE_ID = process.env.AIRTABLE_TASKS_TABLE_ID || 'tbl7m4SD
 // 環境変数名の互換性: AIRTABLE_API_KEY または AIRTABLE_TOKEN を使用
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY || process.env.AIRTABLE_TOKEN;
 
+/**
+ * AirtableレコードURLを生成
+ * @param {Object} params - パラメータ
+ * @param {string} [params.baseId] - Base ID（省略時は環境変数のデフォルト値）
+ * @param {string} [params.tableId] - Table ID（省略時は環境変数のデフォルト値）
+ * @param {string|null} [params.recordId] - Record ID（nullの場合はテーブルURLを返す）
+ * @returns {string} - Airtable URL
+ */
+function buildAirtableRecordUrl({ baseId, tableId, recordId } = {}) {
+  const base = baseId || AIRTABLE_BASE_ID;
+  const table = tableId || AIRTABLE_TASKS_TABLE_ID;
+
+  if (recordId) {
+    return `https://airtable.com/${base}/${table}/${recordId}`;
+  }
+  return `https://airtable.com/${base}/${table}`;
+}
+
 class AirtableMCPClient {
   constructor(options = {}) {
     this.baseId = options.baseId || AIRTABLE_BASE_ID;
@@ -37,7 +55,12 @@ class AirtableMCPClient {
         const record = records[0];
         resolve({
           id: record.id,
-          fields: record.fields
+          fields: record.fields,
+          recordUrl: buildAirtableRecordUrl({
+            baseId: this.baseId,
+            tableId: this.tableId,
+            recordId: record.id
+          })
         });
       });
     });
@@ -110,4 +133,4 @@ class AirtableMCPClient {
   }
 }
 
-module.exports = { AirtableMCPClient };
+module.exports = { AirtableMCPClient, buildAirtableRecordUrl };
