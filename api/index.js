@@ -2555,9 +2555,19 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 
     logger.info(`Extracted ${validTasks.length} task(s)`);
 
-    // Slackメッセージへのリンク
-    const workspaceId = 'unson-inc';
-    const slackLink = `https://${workspaceId}.slack.com/archives/${event.channel}/p${event.ts.replace('.', '')}`;
+    // Slackメッセージへのパーマリンクを取得
+    let slackLink;
+    try {
+      const permalinkResult = await client.chat.getPermalink({
+        channel: event.channel,
+        message_ts: event.ts
+      });
+      slackLink = permalinkResult.permalink;
+    } catch (e) {
+      logger.warn('Failed to get permalink, using fallback:', e.message);
+      const workspaceId = 'unson-inc';
+      slackLink = `https://${workspaceId}.slack.com/archives/${event.channel}/p${event.ts.replace('.', '')}`;
+    }
 
     // スレッドリマインド用のSlackコンテキスト
     const slackContext = {
@@ -2864,9 +2874,19 @@ app.message(async ({ message, client, logger }) => {
 
     logger.info(`Extracted ${validTasks.length} task(s)`);
 
-    // Slackメッセージへのリンクを生成
-    const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
-    const slackLink = `https://${workspaceId}.slack.com/archives/${message.channel}/p${message.ts.replace('.', '')}`;
+    // Slackメッセージへのパーマリンクを取得
+    let slackLink;
+    try {
+      const permalinkResult = await client.chat.getPermalink({
+        channel: message.channel,
+        message_ts: message.ts
+      });
+      slackLink = permalinkResult.permalink;
+    } catch (e) {
+      logger.warn('Failed to get permalink, using fallback:', e.message);
+      const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
+      slackLink = `https://${workspaceId}.slack.com/archives/${message.channel}/p${message.ts.replace('.', '')}`;
+    }
 
     // スレッドリマインド用のSlackコンテキスト
     const slackContext = {
@@ -3050,9 +3070,19 @@ app.message(async ({ message, client, logger }) => {
       }
     }
 
-    // Slackメッセージへのリンクを生成
-    const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
-    const slackLink = `https://${workspaceId}.slack.com/archives/${message.channel}/p${message.ts.replace('.', '')}`;
+    // Slackメッセージへのパーマリンクを取得
+    let slackLink;
+    try {
+      const permalinkResult = await client.chat.getPermalink({
+        channel: message.channel,
+        message_ts: message.ts
+      });
+      slackLink = permalinkResult.permalink;
+    } catch (e) {
+      logger.warn('Failed to get permalink, using fallback:', e.message);
+      const workspaceId = process.env.SLACK_WORKSPACE_ID || 'unson-inc';
+      slackLink = `https://${workspaceId}.slack.com/archives/${message.channel}/p${message.ts.replace('.', '')}`;
+    }
 
     // スレッドの文脈を取得
     let contextText = '';
