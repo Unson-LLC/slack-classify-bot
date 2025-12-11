@@ -1,5 +1,6 @@
 // search-lambda/sync.mjs
 // S3からEFSへソースコードを同期するLambda
+// node_modules, .next, dist などの不要ディレクトリを自動除外
 
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import { writeFileSync, mkdirSync, existsSync, rmSync } from 'fs';
@@ -8,6 +9,29 @@ import { join, dirname } from 'path';
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 const SOURCE_BUCKET = process.env.SOURCE_BUCKET || 'brainbase-source-593793022993';
 const EFS_MOUNT_PATH = '/mnt/source';
+
+// 除外パターン（これらのディレクトリ/ファイルはスキップ）
+const EXCLUDE_PATTERNS = [
+  /node_modules\//,
+  /\.next\//,
+  /dist\//,
+  /\.git\//,
+  /\.DS_Store$/,
+  /__pycache__\//,
+  /\.pyc$/,
+  /\.pyo$/,
+  /\.cache\//,
+  /coverage\//,
+  /\.turbo\//,
+  /\.vercel\//,
+];
+
+/**
+ * パスが除外パターンにマッチするかチェック
+ */
+function shouldExclude(path) {
+  return EXCLUDE_PATTERNS.some(pattern => pattern.test(path));
+}
 
 /**
  * S3からEFSにソースコードを同期
@@ -44,6 +68,7 @@ export const handler = async (event) => {
     let continuationToken;
     let totalFiles = 0;
     let totalSize = 0;
+    let skippedFiles = 0;
 
     do {
       const listCommand = new ListObjectsV2Command({
@@ -61,6 +86,18 @@ export const handler = async (event) => {
         if (obj.Key.endsWith('/')) continue;
 
         const relativePath = obj.Key.replace(s3Prefix, '');
+
+        // 除外パターンチェック
+        if (shouldExclude(relativePath)) {
+          skippedFiles++;
+          if (skippedFiles <= 10) {
+            console.log(`[sync] Skipping: ${relativePath}`);
+          } else if (skippedFiles === 11) {
+            console.log('[sync] ... (more files skipped)');
+          }
+          continue;
+        }
+
         const targetPath = join(targetDir, relativePath);
 
         // Create directory structure
@@ -88,7 +125,7 @@ export const handler = async (event) => {
         }
 
         // Log progress every 100 files
-        if (totalFiles % 100 === 0) {
+        if (totalFiles % 100 === 0 && totalFiles > 0) {
           console.log(`[sync] Progress: ${totalFiles} files synced...`);
         }
       }
@@ -96,7 +133,7 @@ export const handler = async (event) => {
       continuationToken = listResponse.NextContinuationToken;
     } while (continuationToken);
 
-    console.log(`[sync] Completed: ${totalFiles} files, ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`[sync] Completed: ${totalFiles} files, ${(totalSize / 1024 / 1024).toFixed(2)} MB, ${skippedFiles} files skipped`);
 
     return {
       success: true,
@@ -104,6 +141,7 @@ export const handler = async (event) => {
       repo,
       branch,
       filesSync: totalFiles,
+      filesSkipped: skippedFiles,
       totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
       targetDir,
     };
