@@ -12,6 +12,7 @@ import { webSearchTool, webExtractTool } from '../tools/tavily.js';
 import { airtableListBasesTool, airtableListTablesTool, airtableListRecordsTool, airtableSearchRecordsTool, airtableGetRecordTool, airtableCreateRecordTool, airtableUpdateRecordTool, } from '../tools/airtable.js';
 import { gmailListMessagesTool, gmailGetMessageTool, gmailSearchMessagesTool, gmailSendMessageTool, gmailListLabelsTool, gmailGetThreadTool, } from '../tools/gmail.js';
 import { listSourceFilesTool, readSourceFileTool, searchSourceCodeTool, } from '../tools/source-code.js';
+import { calendarListCalendarsTool, calendarListEventsTool, calendarGetFreeBusyTool, calendarFindCommonAvailabilityTool, calendarGetTodayScheduleTool, } from '../tools/calendar.js';
 /**
  * ワークスペース単位のManaエージェントを生成する
  */
@@ -127,6 +128,28 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
 - 「○○の実装を見せて」→ search_source_code + read_source_file
 - 「プロンプトの内容を確認して」→ search_source_code で "prompt" を検索
 
+### Google Calendar操作 → calendar_* を使用
+スケジュール確認・日程調整に使用。
+
+利用可能な操作：
+- カレンダー一覧: calendar_list_calendars（アクセス可能なカレンダーを確認）
+- イベント一覧: calendar_list_events（指定期間の予定を取得）
+- 空き時間取得: calendar_get_freebusy（Free/Busy情報を取得）
+- 共通空き時間検索: calendar_find_common_availability（複数人の空き時間を検索）
+- 今日/明日の予定: calendar_get_today_schedule
+
+使用例：
+- 「今日の予定を教えて」→ calendar_get_today_schedule
+- 「来週の空いている時間は？」→ calendar_find_common_availability
+- 「〇〇さんと△△さんの来週の空き時間を教えて」→ calendar_find_common_availability（複数カレンダー指定）
+- 「12/16〜12/20のスケジュールは？」→ calendar_list_events
+
+**日程調整の流れ**:
+1. calendar_list_calendars でアクセス可能なカレンダーを確認
+2. 対象者のカレンダーIDを特定（共有されているカレンダーのみアクセス可能）
+3. calendar_find_common_availability で共通空き時間を検索
+4. 候補日時を提案
+
 ### その他ツール
 - 議事録コミット時は github_commit_minutes を使用
 - Slack通知時は slack_post_message を使用
@@ -181,6 +204,12 @@ Slackで表示されるため、必ずSlack mrkdwn形式で回答すること：
             list_source_files: listSourceFilesTool,
             read_source_file: readSourceFileTool,
             search_source_code: searchSourceCodeTool,
+            // Google Calendar ツール
+            calendar_list_calendars: calendarListCalendarsTool,
+            calendar_list_events: calendarListEventsTool,
+            calendar_get_freebusy: calendarGetFreeBusyTool,
+            calendar_find_common_availability: calendarFindCommonAvailabilityTool,
+            calendar_get_today_schedule: calendarGetTodayScheduleTool,
         },
     });
 }
