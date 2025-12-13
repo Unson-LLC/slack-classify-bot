@@ -12,6 +12,7 @@ const { generateFollowupMessage, formatMinutesForSlack } = require('./llm-integr
 const { getInstance: getConversationMemory } = require('./conversation-memory');
 const { getProjectIdByChannel } = require('./channel-project-resolver');
 const { isImageFile, downloadAndEncodeImage, analyzeImage } = require('./image-recognition');
+const { sendProposalMessage, getSlackActionHandlers } = require('./meeting-flow-integration');
 
 // Lambda client for async self-invocation
 const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -815,6 +816,26 @@ app.action(/select_channel_.*/, async ({ ack, action, body, client, logger }) =>
         logger,
         fileDataStore
       );
+
+      // Send AI proposal UI for task/decision approval (Phase 4: 会議理解)
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const proposalResult = await sendProposalMessage(
+          client,
+          channelId,
+          fileData.content, // 文字起こしテキスト
+          projectId,
+          projectName,
+          today,
+          minutesData?.actions // 既存の抽出済みactions
+        );
+        if (proposalResult.success && !proposalResult.skipped) {
+          logger.info(`[meeting-flow] Proposal UI sent: decisions=${proposalResult.decisions}, actions=${proposalResult.actions}`);
+        }
+      } catch (proposalError) {
+        // 提案UI送信失敗は議事録投稿の成功に影響させない
+        logger.error('[meeting-flow] Failed to send proposal UI:', proposalError);
+      }
     } else {
       logger.error('Failed to post minutes to channel:', postResult.error);
       await client.chat.update({
@@ -3490,8 +3511,25 @@ app.action(/^task_action_/, async ({ ack, action, body, client, logger }) => {
   }
 });
 
+// Meeting approval action handlers (Phase 4: 会議理解)
+const meetingApprovalActions = getSlackActionHandlers();
+app.action(/^(approve_all|reject_all|approve_decision_\d+|reject_decision_\d+|approve_action_\d+|reject_action_\d+)$/, async ({ ack, action, body, client, logger }) => {
+  await ack();
+  logger.info(`[meeting-approval] Action received: ${action.action_id}`);
+  try {
+    const result = await meetingApprovalActions.handler({ action, message: body.message, channel: body.channel }, client);
+    if (result.success) {
+      logger.info(`[meeting-approval] Success: ${result.message}`);
+    } else {
+      logger.error(`[meeting-approval] Error: ${result.error}`);
+    }
+  } catch (error) {
+    logger.error('[meeting-approval] Handler error:', error);
+  }
+});
+
 // Catch-all action handler for debugging (excluding already handled actions)
-app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_|task_action_|open_followup_modal|open_crosspost_selection|crosspost_to_channel_).*/, async ({ ack, action, logger }) => {
+app.action(/^(?!select_project_|select_channel_|update_airtable_record|change_project_selection|retry_file_processing|reselect_project_for_recommit|skip_channel_github_only|retry_generate_minutes|back_to_channel_selection|cancel_|task_complete_|task_uncomplete_|task_snooze_|task_set_due_|task_edit_|task_action_|open_followup_modal|open_crosspost_selection|crosspost_to_channel_|approve_all|reject_all|approve_decision_|reject_decision_|approve_action_|reject_action_).*/, async ({ ack, action, logger }) => {
   logger.info('=== CATCH-ALL ACTION HANDLER ===');
   logger.info('Unhandled action:', action.action_id);
   logger.info('Action type:', action.type);
