@@ -297,15 +297,9 @@ class ReminderService {
   }
 
   async sendDailySummary(slackId, now = new Date()) {
-    const idToName = await getSlackIdToBrainbaseName();
-    const ownerName = idToName.get(slackId);
-
-    if (!ownerName) {
-      return { success: false, error: 'Owner name not found' };
-    }
-
-    const ownedTasks = await this.taskParser.getTasksByOwner(ownerName);
-    const requestedTasks = await this.taskParser.getTasksByRequester(ownerName);
+    // Slack IDで直接検索（owner_slack_id / requester_slack_id フィールドを使用）
+    const ownedTasks = await this.taskParser.getTasksByOwnerSlackId(slackId);
+    const requestedTasks = await this.taskParser.getTasksByRequesterSlackId(slackId);
 
     const blocks = this.formatDailySummaryBlocks(ownedTasks, requestedTasks, now);
 

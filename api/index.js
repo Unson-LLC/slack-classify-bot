@@ -3524,6 +3524,30 @@ module.exports.handler = async (event, context, callback) => {
     }
   }
 
+  // Test daily summary for a specific user
+  if (event.action === 'test_daily_summary' && event.slackId) {
+    const { WebClient } = require('@slack/web-api');
+    const ReminderService = require('./reminder');
+
+    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+    const reminderService = new ReminderService(slackClient);
+
+    try {
+      const result = await reminderService.sendDailySummary(event.slackId);
+      console.log('Test daily summary sent:', JSON.stringify(result, null, 2));
+      return {
+        statusCode: 200,
+        body: JSON.stringify(result)
+      };
+    } catch (error) {
+      console.error('Failed to send test daily summary:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
+  }
+
   // Check for thread-based reminder trigger (for Slack-created tasks)
   if (event.action === 'run_thread_reminders') {
     const { WebClient } = require('@slack/web-api');

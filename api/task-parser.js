@@ -146,6 +146,24 @@ class TaskParser {
     );
   }
 
+  async getTasksByOwnerSlackId(slackId) {
+    const tasks = await this.getTasks();
+    return tasks.filter(task =>
+      task.owner_slack_id === slackId &&
+      task.status !== 'done' &&
+      task.status !== 'completed'
+    );
+  }
+
+  async getTasksByRequesterSlackId(slackId) {
+    const tasks = await this.getTasks();
+    return tasks.filter(task =>
+      task.requester_slack_id === slackId &&
+      task.status !== 'done' &&
+      task.status !== 'completed'
+    );
+  }
+
   // --- Personal Tasks Methods ---
 
   /**
