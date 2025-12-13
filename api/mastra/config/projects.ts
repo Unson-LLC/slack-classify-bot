@@ -1,5 +1,10 @@
 // mastra/config/projects.ts
 // プロジェクト設定 - AI PM生成用 & Airtable連携
+//
+// ⚠️ 非推奨: このファイルのハードコード設定は後方互換のためのフォールバックです。
+// 推奨: DynamoDB (mana-projects テーブル) から設定を取得してください。
+// 正本: config.yml (Airtable Base ID) + channels.yml (チャンネル→プロジェクトマッピング)
+// 参照: bridge.ts の getProjectByChannelId() 関数
 
 export interface AirtableConfig {
   baseId: string;
@@ -133,6 +138,9 @@ export function getProjectById(projectId: string): ProjectConfig | undefined {
 
 /**
  * チャンネル名からAirtable設定を取得
+ * @deprecated DynamoDB経由の getProjectByChannelId() を使用してください (bridge.ts)
+ * この関数はチャンネル名のパターンマッチングを使用するため、
+ * 実際のチャンネル名（cxo, eng等）がパターンに一致しない場合は失敗します。
  */
 export function getAirtableConfigByChannel(channelName: string): AirtableConfig | undefined {
   const project = getProjectByChannel(channelName);

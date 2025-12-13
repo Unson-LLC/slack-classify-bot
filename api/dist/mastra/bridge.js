@@ -5,7 +5,71 @@ import { getManaByTeamId, getAgent, allAgents, canAccessProject } from './index.
 import { getDefaultWorkspace } from './config/workspaces.js';
 import { getProjectByChannel, getAirtableConfigByChannel } from './config/projects.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { setCurrentProjectId } from './tools/source-code.js';
+// DynamoDB クライアント（プロジェクト設定取得用）
+const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
+const dynamodb = DynamoDBDocumentClient.from(dynamoClient);
+const PROJECTS_TABLE = process.env.PROJECTS_TABLE_NAME || 'mana-projects';
+// プロジェクトキャッシュ（Lambda インスタンス内）
+let projectsCache = null;
+let projectsCacheTime = null;
+const PROJECTS_CACHE_TTL = 10 * 60 * 1000; // 10分
+/**
+ * DynamoDBからプロジェクト設定を取得（キャッシュ付き）
+ */
+async function getProjectFromDynamoDB(projectId) {
+    const now = Date.now();
+    // キャッシュが有効ならそれを使用
+    if (projectsCache && projectsCacheTime && (now - projectsCacheTime < PROJECTS_CACHE_TTL)) {
+        return projectsCache.get(projectId) || null;
+    }
+    try {
+        // 全プロジェクトをスキャンしてキャッシュ
+        const result = await dynamodb.send(new ScanCommand({
+            TableName: PROJECTS_TABLE,
+            FilterExpression: 'attribute_not_exists(is_active) OR is_active = :true',
+            ExpressionAttributeValues: { ':true': true }
+        }));
+        projectsCache = new Map();
+        for (const item of result.Items || []) {
+            projectsCache.set(item.project_id, item);
+        }
+        projectsCacheTime = now;
+        console.log(`[DynamoDB] Loaded ${projectsCache.size} projects`);
+        return projectsCache.get(projectId) || null;
+    }
+    catch (error) {
+        console.error('[DynamoDB] Failed to load projects:', error);
+        return null;
+    }
+}
+/**
+ * チャンネルIDからプロジェクト設定を取得
+ * DynamoDBのslack_channelsフィールドを検索
+ */
+async function getProjectByChannelId(channelId) {
+    const now = Date.now();
+    // キャッシュを更新
+    if (!projectsCache || !projectsCacheTime || (now - projectsCacheTime >= PROJECTS_CACHE_TTL)) {
+        await getProjectFromDynamoDB('__force_refresh__');
+    }
+    if (!projectsCache)
+        return null;
+    // 全プロジェクトのslack_channelsを検索
+    for (const project of projectsCache.values()) {
+        const channels = project.slack_channels || [];
+        const crosspostChannels = project.crosspost_channels || [];
+        const allChannels = [...channels, ...crosspostChannels];
+        if (allChannels.some((ch) => ch.channel_id === channelId)) {
+            console.log(`[DynamoDB] Found project ${project.project_id} for channel ${channelId}`);
+            return project;
+        }
+    }
+    console.log(`[DynamoDB] No project found for channel ${channelId}`);
+    return null;
+}
 const BEDROCK_REGION = 'us-east-1';
 const BRAINBASE_CONTEXT_BUCKET = 'brainbase-context-593793022993';
 // プロジェクト名のキーワードマッピング（質問文から検出用）
@@ -338,9 +402,28 @@ ${glossary}
 3. たとえ一般知識として知っていても、スコープ外の情報は提供しない
 
 ` : '';
-    // 9. Airtableコンテキスト（チャンネル名からプロジェクトのBase IDを特定）
+    // 9. Airtableコンテキスト（DynamoDBからプロジェクトのBase IDを特定）
     let airtableContext = '';
-    if (options.channelName) {
+    // 優先順位: channelId（DynamoDB） > channelName（ハードコード、後方互換）
+    if (options.channelId) {
+        // DynamoDBからチャンネルID→プロジェクト設定を取得
+        const projectConfig = await getProjectByChannelId(options.channelId);
+        if (projectConfig && projectConfig.airtable_base_id) {
+            airtableContext = `
+【Airtable設定（このチャンネルのプロジェクト用）】
+プロジェクト: ${projectConfig.name || projectConfig.project_id}
+- Base ID: ${projectConfig.airtable_base_id}
+- 機能要求テーブル: tblRBCgdT42VKx3eJ
+- 要件テーブル: tblgtuQ55xeeAXM0S
+
+Airtableツール使用時は必ずこのBase IDを使用してください。ユーザーにBase IDを聞く必要はありません。
+
+`;
+            console.log(`[INFO] Airtable context injected from DynamoDB for ${projectConfig.name}: baseId=${projectConfig.airtable_base_id}`);
+        }
+    }
+    else if (options.channelName) {
+        // 後方互換: channelNameからハードコードされた設定を使用（非推奨）
         const airtableConfig = getAirtableConfigByChannel(options.channelName);
         if (airtableConfig) {
             const detectedProject = getProjectByChannel(options.channelName);
@@ -354,7 +437,7 @@ ${glossary}
 Airtableツール使用時は必ずこのBase IDを使用してください。ユーザーにBase IDを聞く必要はありません。
 
 `;
-            console.log(`[INFO] Airtable context injected for ${detectedProject?.name}: baseId=${airtableConfig.baseId}`);
+            console.log(`[INFO] Airtable context injected from hardcoded config for ${detectedProject?.name}: baseId=${airtableConfig.baseId}`);
         }
     }
     const prompt = `${formatInstruction}${scopeRestriction}${airtableContext}${contextSection}${senderInfo}${question}`;
@@ -417,6 +500,7 @@ export async function askProjectPM(question, options) {
     // teamIdがあればaskManaを使用、なければデフォルトで動作
     return askMana(question, {
         teamId: options.teamId,
+        channelId: options.channelId, // DynamoDB経由でプロジェクト設定を取得
         channelName: options.channelName,
         threadId: options.threadId,
         senderName: options.senderName,

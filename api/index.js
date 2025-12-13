@@ -2364,6 +2364,7 @@ app.event('app_mention', async ({ event, client, logger, context }) => {
           const mastraBridge = await import('./dist/mastra/bridge.js');
           logger.info('Using Mastra bridge for question');
           response = await mastraBridge.askProjectPM(questionWithContext, {
+            channelId: event.channel,  // DynamoDB経由でプロジェクト設定を取得
             channelName,
             senderName,
             threadId: event.ts,
@@ -3669,66 +3670,138 @@ module.exports.handler = async (event, context, callback) => {
 
   // 日次ログをスプリントに追記（EventBridgeから21:00 JSTに実行）
   if (event.action === 'append_daily_log') {
-    const { AirtableMilestoneClient, PROJECT_BASE_MAPPING } = require('./airtable-milestone-client');
-    const { WebClient } = require('@slack/web-api');
+    const { DailyLogGenerator } = require('./daily-log-generator');
+    const { PROJECT_BASE_MAPPING } = require('./airtable-milestone-client');
 
-    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
-    const results = [];
+    const generator = new DailyLogGenerator();
     const targetProjects = event.projects || Object.keys(PROJECT_BASE_MAPPING);
 
-    // 今日の日付（JST）
-    const now = new Date();
-    const jstDate = now.toLocaleDateString('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      month: 'numeric',
-      day: 'numeric',
-    });
-    const weekday = now.toLocaleDateString('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      weekday: 'short',
-    });
+    console.log('=== DAILY LOG GENERATION ===');
+    console.log(`Target projects: ${targetProjects.join(', ')}`);
 
-    for (const projectId of targetProjects) {
-      try {
-        const client = new AirtableMilestoneClient(projectId);
-        const currentSprint = await client.getCurrentSprint();
+    try {
+      const results = await generator.generateAndAppendAllLogs(targetProjects);
 
-        if (!currentSprint) {
-          console.log(`No active sprint for ${projectId}, skipping`);
-          results.push({ projectId, skipped: true, reason: 'no_active_sprint' });
-          continue;
-        }
+      const summary = {
+        total: results.length,
+        success: results.filter(r => r.success).length,
+        skipped: results.filter(r => r.skipped).length,
+        failed: results.filter(r => r.error).length,
+      };
 
-        // TODO: Slack履歴、タスク変更、会議記録から日次ログを生成
-        // 現時点ではプレースホルダー
-        const logEntry = `## ${jstDate} (${weekday})
-- Slack: （実装予定：チャンネル活動サマリ）
-- タスク: （実装予定：完了/追加タスク）
-- 会議: （実装予定：議事録サマリ）`;
+      console.log('Daily log generation completed:', JSON.stringify(summary, null, 2));
 
-        await client.appendDailyLog(currentSprint.id, logEntry);
-
-        results.push({
-          projectId,
-          sprintId: currentSprint.id,
-          sprintPeriod: currentSprint.period,
-          success: true,
-        });
-
-        console.log(`Appended daily log to ${projectId} sprint ${currentSprint.period}`);
-      } catch (error) {
-        console.error(`Failed to append daily log for ${projectId}:`, error);
-        results.push({ projectId, error: error.message });
-      }
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          results,
+          summary,
+          timestamp: new Date().toISOString(),
+        })
+      };
+    } catch (error) {
+      console.error('Failed to generate daily logs:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
     }
+  }
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        results,
-        timestamp: new Date().toISOString(),
-      })
-    };
+  // チャンネルマッピングをS3に同期（埋め込みデータを使用）
+  if (event.action === 'sync_channels') {
+    const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+
+    const S3_BUCKET = process.env.S3_BUCKET || 'brainbase-context-593793022993';
+    const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
+
+    console.log('=== SYNC CHANNELS TO S3 ===');
+
+    try {
+      // event.channelsData で直接渡された場合はそれを使う、なければ埋め込みデータ
+      let channelsData;
+
+      if (event.channelsData) {
+        channelsData = event.channelsData;
+        console.log('Using provided channelsData');
+      } else {
+        // 埋め込みチャンネルデータ（channels.ymlの内容）
+        console.log('Using embedded channel mapping');
+        channelsData = {
+          channels: [
+            // Zeims
+            { channel_id: 'C07LP2EPVQA', channel_name: '0010-zeims-biz', project_id: 'proj_zeims', workspace: 'unson', type: 'business' },
+            { channel_id: 'C07QX6DN9M0', channel_name: '0011-zeims-dev', project_id: 'proj_zeims', workspace: 'unson', type: 'development' },
+            { channel_id: 'C09V8RW3THS', channel_name: '0012-zeims-board', project_id: 'proj_zeims', workspace: 'unson', type: 'board' },
+            // SalesTailor
+            { channel_id: 'C08U2EX2NEA', channel_name: 'cxo', project_id: 'proj_salestailor', workspace: 'salestailor', type: 'executive' },
+            { channel_id: 'C08SX913NER', channel_name: 'eng', project_id: 'proj_salestailor', workspace: 'salestailor', type: 'development' },
+            { channel_id: 'C0A1620L4TS', channel_name: 'eng-deploy', project_id: 'proj_salestailor', workspace: 'salestailor', type: 'deployment' },
+            // BAAO
+            { channel_id: 'C08K58SUQ7N', channel_name: '0110-baao', project_id: 'proj_baao', workspace: 'unson', type: 'general' },
+            { channel_id: 'C09L3EKAUEA', channel_name: '0111-baao-ai-dojo', project_id: 'proj_baao', workspace: 'unson', type: 'development' },
+            // DialogAI
+            { channel_id: 'C08E010PYKE', channel_name: '0030-dialogai-biz', project_id: 'proj_dialogai', workspace: 'unson', type: 'business' },
+            { channel_id: 'C08A6ETSSR2', channel_name: '0031-dialogai-dev', project_id: 'proj_dialogai', workspace: 'unson', type: 'development' },
+            // Brainbase
+            { channel_id: 'C088CKDEJGN', channel_name: 'proj_brainbase', project_id: 'proj_brainbase', workspace: 'unson', type: 'project' },
+          ]
+        };
+      }
+
+      if (!channelsData || !channelsData.channels) {
+        throw new Error('Invalid channels data: missing channels array');
+      }
+
+      // Transform: add project_id_short
+      const transformedChannels = channelsData.channels.map(ch => ({
+        ...ch,
+        project_id_short: ch.project_id?.replace(/^proj_/, '') || null,
+      }));
+
+      const jsonData = {
+        channels: transformedChannels,
+        last_synced: new Date().toISOString(),
+        source: 'channels.yml',
+        total_channels: transformedChannels.length,
+      };
+
+      // Upload to S3
+      const s3Client = new S3Client({ region: AWS_REGION });
+      const putCmd = new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: 'channels.json',
+        Body: JSON.stringify(jsonData, null, 2),
+        ContentType: 'application/json',
+      });
+
+      await s3Client.send(putCmd);
+
+      console.log(`Synced ${transformedChannels.length} channels to S3`);
+
+      // Summary by project
+      const projectCounts = {};
+      for (const ch of transformedChannels) {
+        const project = ch.project_id_short || 'unknown';
+        projectCounts[project] = (projectCounts[project] || 0) + 1;
+      }
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          success: true,
+          total_channels: transformedChannels.length,
+          by_project: projectCounts,
+          timestamp: new Date().toISOString(),
+        })
+      };
+    } catch (error) {
+      console.error('Failed to sync channels:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
   }
 
   // 次週スプリントを自動生成（EventBridgeから金曜18:00 JSTに実行）

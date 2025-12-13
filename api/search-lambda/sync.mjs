@@ -1,6 +1,6 @@
 // search-lambda/sync.mjs
 // S3からEFSへソースコードを同期するLambda
-// node_modules, .next, dist などの不要ディレクトリを自動除外
+// app/ 配下のみを対象とし、node_modules等は除外
 
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import { writeFileSync, mkdirSync, existsSync, rmSync } from 'fs';
@@ -9,6 +9,9 @@ import { join, dirname } from 'path';
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 const SOURCE_BUCKET = process.env.SOURCE_BUCKET || 'brainbase-source-593793022993';
 const EFS_MOUNT_PATH = '/mnt/source';
+
+// デフォルトの対象ディレクトリ（コードのみ）
+const DEFAULT_INCLUDE_PATHS = ['app/'];
 
 // 除外パターン（これらのディレクトリ/ファイルはスキップ）
 const EXCLUDE_PATTERNS = [
@@ -27,6 +30,13 @@ const EXCLUDE_PATTERNS = [
 ];
 
 /**
+ * パスが対象ディレクトリに含まれるかチェック
+ */
+function shouldInclude(path, includePaths) {
+  return includePaths.some(prefix => path.startsWith(prefix));
+}
+
+/**
  * パスが除外パターンにマッチするかチェック
  */
 function shouldExclude(path) {
@@ -41,11 +51,12 @@ function shouldExclude(path) {
  *   - repo: string (例: "salestailor-project")
  *   - branch: string (デフォルト: "main")
  *   - clean: boolean (trueなら既存を削除して再同期)
+ *   - includePaths: string[] (対象ディレクトリ、デフォルト: ["app/"])
  */
 export const handler = async (event) => {
   console.log('[sync] Event:', JSON.stringify(event));
 
-  const { owner, repo, branch = 'main', clean = false } = event;
+  const { owner, repo, branch = 'main', clean = false, includePaths = DEFAULT_INCLUDE_PATHS } = event;
 
   if (!owner || !repo) {
     return { success: false, error: 'owner and repo are required' };
@@ -86,6 +97,12 @@ export const handler = async (event) => {
         if (obj.Key.endsWith('/')) continue;
 
         const relativePath = obj.Key.replace(s3Prefix, '');
+
+        // 対象ディレクトリチェック（app/配下のみ）
+        if (!shouldInclude(relativePath, includePaths)) {
+          skippedFiles++;
+          continue;
+        }
 
         // 除外パターンチェック
         if (shouldExclude(relativePath)) {
@@ -140,6 +157,7 @@ export const handler = async (event) => {
       owner,
       repo,
       branch,
+      includePaths,
       filesSync: totalFiles,
       filesSkipped: skippedFiles,
       totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),

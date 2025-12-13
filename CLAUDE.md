@@ -16,6 +16,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **会議議事録**: Slackファイル共有からの議事録自動生成・GitHub保存
 - **通知連携**: @k.satoメンションを_inbox/pending.mdに自動蓄積
 - **プロジェクト情報管理**: DynamoDBによるプロジェクト・チャンネルマッピング
+  - 正本: `/Users/ksato/workspace/config.yml`（プロジェクト設定）と`/Users/ksato/workspace/_codex/common/meta/slack/channels.yml`
+  - キャッシュ: DynamoDB `mana-projects`（`scripts/sync-config-to-dynamodb.js`で同期、`--dry-run`可）
+  - チャンネル高速解決: S3 `brainbase-context-593793022993/channels.json`（`scripts/sync-channels-to-s3.js`）
+  - その他チャンネル: `proj_other` は config.yml に `id: other` を追加し整合
 
 ### アーキテクチャ
 ```
