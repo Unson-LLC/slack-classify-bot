@@ -3,6 +3,7 @@
 // Working Memory: ユーザー嗜好・コンテキストのZodスキーマベース管理
 import { Memory } from '@mastra/memory';
 import { DynamoDBStore } from '@mastra/dynamodb';
+import { userProfileSchema } from './memory-schema.js';
 // DynamoDB Storage設定
 // テーブルは事前に作成が必要（TABLE_SETUP.md参照）
 const storage = new DynamoDBStore({
@@ -19,12 +20,11 @@ export const memory = new Memory({
     storage,
     options: {
         lastMessages: 20, // 直近20メッセージを保持
-        // Working Memory一時無効化（Bedrock互換性問題 - GitHub Issue #5935）
-        // TODO: Mastra側のBedrock対応が修正されたら再有効化
-        // workingMemory: {
-        //   enabled: true,
-        //   schema: userProfileSchema, // Zodスキーマでユーザープロファイルを管理
-        // },
+        // Working Memory有効化（GitHub Issue #5935 解決済み - Zod v3系で動作）
+        workingMemory: {
+            enabled: true,
+            schema: userProfileSchema, // Zodスキーマでユーザープロファイルを管理
+        },
     },
 });
 // スキーマ・ユーティリティの再エクスポート
