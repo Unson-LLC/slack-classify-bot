@@ -11,20 +11,12 @@ const path = require('path');
 const ProjectRepository = require(path.join(__dirname, '../api/project-repository'));
 
 // Source repo mappings (GitHub owner/repo/branch)
+// Based on config.yml mappings from brainbase
 const SOURCE_REPO_MAPPINGS = {
+  // --- Unson-LLC repos ---
   'proj_salestailor': {
     source_owner: 'Unson-LLC',
-    source_repo: 'salestailor-project',
-    source_branch: 'main'
-  },
-  'proj_tech-knight-board': {
-    source_owner: 'Tech-Knight-inc',
-    source_repo: 'tech-knight-project',
-    source_branch: 'main'
-  },
-  'proj_aitle': {
-    source_owner: 'Tech-Knight-inc',
-    source_repo: 'tech-knight-project',
+    source_repo: 'salestailor',
     source_branch: 'main'
   },
   'proj_zeims': {
@@ -34,7 +26,17 @@ const SOURCE_REPO_MAPPINGS = {
   },
   'proj_baao': {
     source_owner: 'Unson-LLC',
-    source_repo: 'baao-lark',
+    source_repo: 'baao-project',
+    source_branch: 'main'
+  },
+  'proj_unson': {
+    source_owner: 'Unson-LLC',
+    source_repo: 'Drive',
+    source_branch: 'main'
+  },
+  'proj_ncom': {
+    source_owner: 'Unson-LLC',
+    source_repo: 'ncom-catalyst',
     source_branch: 'main'
   },
   'proj_senrigan': {
@@ -42,12 +44,76 @@ const SOURCE_REPO_MAPPINGS = {
     source_repo: 'senrigan-project',
     source_branch: 'main'
   },
-  'proj_ncom': {
+  'proj_dialogai': {
     source_owner: 'Unson-LLC',
-    source_repo: 'ncom-catalyst',
+    source_repo: 'dialog_ai',
+    source_branch: 'main'
+  },
+  'proj_mywa': {
+    source_owner: 'Unson-LLC',
+    source_repo: 'MyWa',
+    source_branch: 'main'
+  },
+  'proj_unson-os': {
+    source_owner: 'Unson-LLC',
+    source_repo: 'unson_os',
+    source_branch: 'main'
+  },
+  'proj_back-office': {
+    source_owner: 'Unson-LLC',
+    source_repo: 'back_office',
+    source_branch: 'main'
+  },
+
+  // --- Tech-Knight-inc repos ---
+  'proj_tech-knight': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'tech-knight-project',
+    source_branch: 'main'
+  },
+  'proj_tech-knight-board': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'tech-knight-project',
+    source_branch: 'main'
+  },
+  'proj_aitle': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'Aitle',
+    source_branch: 'main'
+  },
+  'proj_eve-topi': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'eve-topi',
+    source_branch: 'main'
+  },
+  'proj_hp_sales': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'hotel-hp-template',
+    source_branch: 'main'
+  },
+  'proj_smartfront': {
+    source_owner: 'Tech-Knight-inc',
+    source_repo: 'smartfront',
+    source_branch: 'main'
+  },
+
+  // --- Personal repos ---
+  'proj_sato-portfolio': {
+    source_owner: 'sintariran',
+    source_repo: 'sato-portfolio',
+    source_branch: 'main'
+  },
+  'proj_brainbase': {
+    source_owner: 'sintariran',
+    source_repo: 'brainbase',
+    source_branch: 'main'
+  },
+  'proj_mana': {
+    source_owner: 'sintariran',
+    source_repo: 'mana',
     source_branch: 'main'
   }
-  // Note: proj_back-office, proj_dialogai etc. use Google Drive, not GitHub
+  // Note: proj_ai-wolf, proj_emporio, proj_notionconnect, proj_postio, proj_toranomon are archived or local-only
 };
 
 async function addSourceRepoFields() {

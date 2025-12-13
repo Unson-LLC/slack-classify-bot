@@ -26,10 +26,23 @@ async function getSourceRepoConfig(projectId) {
     if (!project.source_owner || !project.source_repo) {
         throw new Error(`Source repo not configured for project: ${projectId}`);
     }
+    // glob_include からディレクトリプレフィックスを抽出
+    // 例: ["app/**/*", "docs/**/*"] → ["app/", "docs/"]
+    const globInclude = project.source_glob_include || [];
+    const includePaths = globInclude
+        .map((pattern) => {
+        // "app/**/*" → "app/"
+        const match = pattern.match(/^([^*]+)/);
+        return match ? match[1].replace(/\/$/, '') + '/' : null;
+    })
+        .filter((p) => p !== null && p !== '/');
+    console.log(`[source-code] glob_include: ${JSON.stringify(globInclude)}, includePaths: ${JSON.stringify(includePaths)}`);
     return {
         owner: project.source_owner,
         repo: project.source_repo,
         branch: project.source_branch || 'main',
+        globInclude,
+        includePaths,
     };
 }
 // Helper: Invoke search lambda
@@ -77,6 +90,8 @@ export const listSourceFilesTool = createTool({
                 path: dirPath,
                 pattern,
                 maxFiles: maxFiles || 100,
+                // includePaths を Lambda に渡す（複数ディレクトリ対応）
+                includePaths: dirPath ? undefined : sourceConfig.includePaths,
             });
             if (!result.success) {
                 return result;
@@ -180,16 +195,21 @@ export const searchSourceCodeTool = createTool({
             }
             console.log(`[source-code] search_source_code called for: ${query}`);
             const sourceConfig = await getSourceRepoConfig(projectId);
+            // includePaths が設定されている場合、パスを制限
+            // ユーザー指定のpathがあればそれを優先、なければincludePathsを使用
+            const searchPath = dirPath || (sourceConfig.includePaths.length > 0 ? undefined : undefined);
             const result = await invokeSearchLambda({
                 action: 'search',
                 owner: sourceConfig.owner,
                 repo: sourceConfig.repo,
                 branch: sourceConfig.branch,
                 query,
-                path: dirPath,
+                path: searchPath,
                 filePattern,
                 maxResults: maxResults || 20,
                 caseSensitive: caseSensitive || false,
+                // includePaths を Lambda に渡す（複数ディレクトリ対応）
+                includePaths: dirPath ? undefined : sourceConfig.includePaths,
             });
             if (!result.success) {
                 return result;
