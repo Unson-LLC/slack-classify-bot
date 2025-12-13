@@ -3668,6 +3668,39 @@ module.exports.handler = async (event, context, callback) => {
     }
   }
 
+  // 日次ログをプレビュー（追記せずに生成結果だけ返す）
+  if (event.action === 'preview_daily_log') {
+    const { DailyLogGenerator } = require('./daily-log-generator');
+
+    const generator = new DailyLogGenerator();
+    const projectId = event.project_id || 'zeims';
+    const dateStr = event.date || null; // YYYY-MM-DD形式
+
+    console.log(`=== PREVIEW DAILY LOG: ${projectId} / ${dateStr || 'today'} ===`);
+
+    try {
+      const log = await generator.generateDailyLog(projectId, dateStr);
+      const meetingSummary = await generator.getMeetingSummary(projectId, dateStr || generator.getTodayJST().dateStr);
+
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          projectId,
+          date: dateStr || generator.getTodayJST().dateStr,
+          log,
+          meetings: meetingSummary,
+          timestamp: new Date().toISOString(),
+        })
+      };
+    } catch (error) {
+      console.error('Failed to preview daily log:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
+  }
+
   // 日次ログをスプリントに追記（EventBridgeから21:00 JSTに実行）
   if (event.action === 'append_daily_log') {
     const { DailyLogGenerator } = require('./daily-log-generator');

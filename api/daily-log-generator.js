@@ -5,7 +5,7 @@
  * 以下の情報を統合して日次ログを生成:
  * 1. Slack履歴: プロジェクト関連チャンネルの活動サマリ
  * 2. タスク状況: Airtableタスクの完了・追加・進行中
- * 3. 会議記録: その日の議事録サマリ（将来実装）
+ * 3. 会議記録: Slackに投稿された議事録からサマリを自動抽出
  */
 
 const { S3Client, GetObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
@@ -97,6 +97,124 @@ class DailyLogGenerator {
       console.warn(`Failed to get messages for ${channelId}/${dateStr}:`, error.message);
       return [];
     }
+  }
+
+  /**
+   * メッセージが議事録投稿かどうかを判定
+   * @param {Object} message - Slackメッセージ
+   * @returns {boolean}
+   */
+  isMeetingPost(message) {
+    const text = message.text || '';
+
+    // manaが投稿した議事録パターンを検出
+    const patterns = [
+      '会議要約',
+      '詳細議事録',
+      '議事録',
+      'この議事録はAIにより',
+      '### 要約',
+      '### 決定事項',
+      '### Next Action',
+    ];
+
+    return patterns.some(pattern => text.includes(pattern));
+  }
+
+  /**
+   * 議事録メッセージからサマリ部分を抽出
+   * @param {Object} message - 議事録メッセージ
+   * @returns {Object} { title, summary, hasActions, threadTs }
+   */
+  extractMeetingInfo(message) {
+    const text = message.text || '';
+
+    // タイトル抽出（複数パターン対応）
+    let title = '会議';
+
+    // パターン1: 「○○会議」形式
+    const bracketMatch = text.match(/[「『【]([^」』】]+(?:会議|MTG|ミーティング|打合せ)[^」』】]*)[」』】]/);
+    if (bracketMatch) {
+      title = bracketMatch[1];
+    } else {
+      // パターン2: :memo: 会議要約: {タイトル}.txt 形式
+      const memoMatch = text.match(/会議要約[:：]\s*([^.]+)/);
+      if (memoMatch) {
+        title = memoMatch[1].trim();
+      } else {
+        // パターン3: 詳細議事録: {タイトル} 形式
+        const detailMatch = text.match(/詳細議事録[:：]\s*([^.]+)/);
+        if (detailMatch) {
+          title = detailMatch[1].trim();
+        }
+      }
+    }
+
+    // 要約部分を抽出
+    let summary = '';
+
+    // "### 要約" セクションから抽出
+    const summaryMatch = text.match(/###\s*要約\s*\n([\s\S]*?)(?=###|$)/);
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim();
+      // 最初の3行まで
+      const lines = summary.split('\n').filter(l => l.trim()).slice(0, 3);
+      summary = lines.join('\n');
+    } else {
+      // 会議要約の後の最初の段落
+      const briefMatch = text.match(/会議要約[*_]*\s*\n+([\s\S]*?)(?=\n\n|📄|$)/);
+      if (briefMatch) {
+        summary = briefMatch[1].trim().slice(0, 200);
+        if (briefMatch[1].length > 200) summary += '...';
+      }
+    }
+
+    // Next Action があるかチェック
+    const hasActions = text.includes('Next Action') || text.includes('アクション');
+
+    // 投稿時刻
+    const timestamp = message.ts ? new Date(parseFloat(message.ts) * 1000) : null;
+    const timeStr = timestamp
+      ? `${timestamp.getHours()}:${String(timestamp.getMinutes()).padStart(2, '0')}`
+      : '';
+
+    // スレッドID（重複排除用）
+    const threadTs = message.thread_ts || message.ts;
+
+    return { title, summary, hasActions, timeStr, threadTs };
+  }
+
+  /**
+   * プロジェクトの会議サマリを取得
+   * @param {string} projectId - プロジェクトID
+   * @param {string} dateStr - 日付
+   * @returns {Promise<Array>} 会議情報配列
+   */
+  async getMeetingSummary(projectId, dateStr) {
+    const channels = await this.getProjectChannels(projectId);
+    const meetingsMap = new Map(); // threadTsで重複排除
+
+    for (const { channelId, channelName } of channels) {
+      const messages = await this.getSlackMessagesForDate(channelId, dateStr, 'unson');
+
+      // 議事録メッセージを検出
+      const meetingPosts = messages.filter(m => this.isMeetingPost(m));
+
+      for (const post of meetingPosts) {
+        const info = this.extractMeetingInfo(post);
+        const key = `${channelId}-${info.threadTs}`;
+
+        // 同一スレッドの場合、最初の投稿（会議要約）を優先
+        if (!meetingsMap.has(key)) {
+          meetingsMap.set(key, {
+            ...info,
+            channelName,
+          });
+        }
+      }
+    }
+
+    return Array.from(meetingsMap.values());
   }
 
   /**
@@ -262,12 +380,21 @@ class DailyLogGenerator {
    * @returns {Promise<string>} 日次ログ（マークダウン形式）
    */
   async generateDailyLog(projectId, dateStr = null) {
-    const { dateStr: today, displayDate, weekday } = this.getTodayJST();
+    const { dateStr: today } = this.getTodayJST();
     const targetDate = dateStr || today;
 
-    const [slackSummary, taskSummary] = await Promise.all([
+    // 指定日の表示用日付を計算（YYYY-MM-DD形式から直接抽出）
+    const [year, month, day] = targetDate.split('-').map(Number);
+    const displayDate = `${month}/${day}`;
+    // 曜日計算（Zellerの公式簡易版）
+    const targetDateObj = new Date(year, month - 1, day);
+    const weekdays = ['日', '月', '火', '水', '木', '金', '土'];
+    const weekday = weekdays[targetDateObj.getDay()];
+
+    const [slackSummary, taskSummary, meetingSummary] = await Promise.all([
       this.generateSlackSummary(projectId, targetDate),
       this.getTaskSummary(projectId),
+      this.getMeetingSummary(projectId, targetDate),
     ]);
 
     // 日次ログを構築
@@ -296,9 +423,23 @@ class DailyLogGenerator {
       }
     }
 
-    // 会議（将来実装）
+    // 会議
     logParts.push(`### 会議`);
-    logParts.push(`（自動検出は将来実装予定）`);
+    if (meetingSummary.length === 0) {
+      logParts.push(`（会議なし）`);
+    } else {
+      for (const meeting of meetingSummary) {
+        const timePrefix = meeting.timeStr ? `[${meeting.timeStr}] ` : '';
+        const actionIcon = meeting.hasActions ? ' (📋 Actions)' : '';
+        logParts.push(`- ${timePrefix}**${meeting.title}**${actionIcon}`);
+        if (meeting.summary) {
+          // サマリを整形（インデント付き）
+          const summaryLines = meeting.summary.split('\n').map(l => `  ${l}`);
+          logParts.push(...summaryLines);
+        }
+        logParts.push(`  _#${meeting.channelName}_`);
+      }
+    }
 
     return logParts.join('\n');
   }
