@@ -71,9 +71,16 @@ function buildProjectRecords(configObj, channelsList) {
       project_id: pid,
       name,
       is_active: true,
+      // GitHub config (airtable-integration.js expects these field names)
+      owner: p.github?.owner,
+      repo: p.github?.repo,
+      branch: p.github?.branch || (p.github ? DEFAULT_BRANCH : undefined),
+      path_prefix: p.github?.path_prefix || (p.github ? 'meetings/' : undefined),
+      // Legacy field names for backwards compatibility
       github_owner: p.github?.owner,
       github_repo: p.github?.repo,
       github_branch: p.github?.branch || (p.github ? DEFAULT_BRANCH : undefined),
+      // Other config
       airtable_base_id: p.airtable?.base_id,
       airtable_base_name: p.airtable?.base_name,
       local_path: p.local?.path,
