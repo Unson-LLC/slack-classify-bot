@@ -1,5 +1,6 @@
 const TaskParser = require('./task-parser');
 const { getSlackIdToBrainbaseName, getMembersMapping } = require('./slack-name-resolver');
+const { getUserReminderTiming } = require('./memory-helper.cjs');
 
 class ReminderService {
   constructor(slackClient) {
@@ -321,6 +322,32 @@ class ReminderService {
     }
   }
 
+  /**
+   * ユーザーのリマインド時刻がcurrentHourと一致するか判定
+   * @param {string} slackId - Slack User ID
+   * @param {string} currentHour - 現在時刻のHH形式（JST）
+   * @param {string} defaultHour - デフォルトの送信時刻（デフォルト: '09'）
+   * @returns {Promise<boolean>} 送信すべきならtrue
+   */
+  async shouldSendReminderNow(slackId, currentHour, defaultHour = '09') {
+    try {
+      const reminderTiming = await getUserReminderTiming(slackId);
+
+      if (!reminderTiming) {
+        // Working Memoryに設定がなければデフォルト時刻で送信
+        return currentHour === defaultHour;
+      }
+
+      // HH:mm形式からHHを取得
+      const preferredHour = reminderTiming.split(':')[0];
+      return currentHour === preferredHour;
+    } catch (error) {
+      console.error(`Failed to check reminder timing for ${slackId}:`, error.message);
+      // エラー時はデフォルト時刻で送信
+      return currentHour === defaultHour;
+    }
+  }
+
   async runDailyReminders() {
     console.log('Running daily reminders...');
 
@@ -333,6 +360,42 @@ class ReminderService {
     return {
       overdue: overdueResults,
       dueSoon: dueSoonResults,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  /**
+   * 全メンバーへの日次サマリーを送信（Working Memoryのリマインド時刻を考慮）
+   * @param {string} triggerHour - トリガーされた時刻のHH形式（JST）
+   * @returns {Promise<object>} 送信結果
+   */
+  async runDailySummaries(triggerHour) {
+    console.log(`Running daily summaries for hour ${triggerHour}...`);
+
+    const mapping = await getMembersMapping();
+    const results = [];
+
+    for (const [name, slackId] of mapping) {
+      // ユーザーのリマインド時刻をチェック
+      const shouldSend = await this.shouldSendReminderNow(slackId, triggerHour);
+
+      if (!shouldSend) {
+        console.log(`Skipping ${name} (${slackId}) - not their preferred time`);
+        results.push({ name, slackId, skipped: true, reason: 'not_preferred_time' });
+        continue;
+      }
+
+      const result = await this.sendDailySummary(slackId);
+      results.push({ name, slackId, ...result });
+    }
+
+    const sent = results.filter(r => r.success === true).length;
+    const skipped = results.filter(r => r.skipped).length;
+    console.log(`Daily summaries: ${sent} sent, ${skipped} skipped`);
+
+    return {
+      results,
+      summary: { sent, skipped, total: results.length },
       timestamp: new Date().toISOString()
     };
   }

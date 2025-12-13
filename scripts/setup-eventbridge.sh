@@ -169,3 +169,84 @@ echo "    --payload '{\"action\": \"run_reminders\"}' \\"
 echo "    --cli-binary-format raw-in-base64-out \\"
 echo "    --region $REGION --profile $PROFILE \\"
 echo "    /dev/stdout"
+
+# ==============================================================================
+# Rule 3: Daily Summaries (Hourly check for user-specific reminder times)
+# ==============================================================================
+
+SUMMARY_RULE_NAME="mana-daily-summaries"
+# Every hour from 7:00-21:00 JST (22:00-12:00 UTC)
+# Using hourly for flexibility: cron(0 22,23,0,1,2,3,4,5,6,7,8,9,10,11,12 * * ? *)
+# Simplified: Run every hour (filter in Lambda)
+SUMMARY_SCHEDULE="cron(0 * * * ? *)"
+
+echo ""
+echo "🔧 Setting up EventBridge rule: $SUMMARY_RULE_NAME"
+echo "   Schedule: $SUMMARY_SCHEDULE (every hour)"
+echo ""
+
+# 1. Create or update the EventBridge rule
+echo "[1/3] Creating EventBridge rule..."
+aws events put-rule \
+  --name "$SUMMARY_RULE_NAME" \
+  --schedule-expression "$SUMMARY_SCHEDULE" \
+  --state ENABLED \
+  --description "Daily summaries with user-specific reminder times (hourly check)" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+# 2. Add Lambda permission for EventBridge to invoke
+echo "[2/3] Adding Lambda permission for EventBridge..."
+# Remove existing permission if exists (ignore error)
+aws lambda remove-permission \
+  --function-name "$FUNCTION_NAME" \
+  --statement-id "${SUMMARY_RULE_NAME}-permission" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager 2>/dev/null || true
+
+aws lambda add-permission \
+  --function-name "$FUNCTION_NAME" \
+  --statement-id "${SUMMARY_RULE_NAME}-permission" \
+  --action "lambda:InvokeFunction" \
+  --principal "events.amazonaws.com" \
+  --source-arn "arn:aws:events:${REGION}:${ACCOUNT_ID}:rule/${SUMMARY_RULE_NAME}" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+# 3. Add the Lambda target to the rule
+echo "[3/3] Adding Lambda target to rule..."
+aws events put-targets \
+  --rule "$SUMMARY_RULE_NAME" \
+  --targets "[{
+    \"Id\": \"mana-summary-target\",
+    \"Arn\": \"arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${FUNCTION_NAME}\",
+    \"Input\": \"{\\\"action\\\": \\\"run_daily_summaries\\\"}\"
+  }]" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+echo ""
+echo "✅ Daily summaries rule setup complete!"
+echo ""
+echo "Rule Details:"
+echo "  - Name: $SUMMARY_RULE_NAME"
+echo "  - Schedule: Every hour (checks user's preferred reminder time)"
+echo "  - Target: $FUNCTION_NAME Lambda"
+echo "  - Payload: {\"action\": \"run_daily_summaries\"}"
+echo ""
+echo "To test manually:"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME \\"
+echo "    --payload '{\"action\": \"run_daily_summaries\"}' \\"
+echo "    --cli-binary-format raw-in-base64-out \\"
+echo "    --region $REGION --profile $PROFILE \\"
+echo "    /dev/stdout"

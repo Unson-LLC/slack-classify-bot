@@ -3548,6 +3548,39 @@ module.exports.handler = async (event, context, callback) => {
     }
   }
 
+  // Run daily summaries with Working Memory consideration
+  // Triggered by EventBridge, checks each user's preferred reminder time
+  if (event.action === 'run_daily_summaries') {
+    const { WebClient } = require('@slack/web-api');
+    const ReminderService = require('./reminder');
+
+    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+    const reminderService = new ReminderService(slackClient);
+
+    // Get current hour in JST
+    const now = new Date();
+    const jstHour = now.toLocaleString('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      hour: '2-digit',
+      hour12: false
+    }).padStart(2, '0');
+
+    try {
+      const results = await reminderService.runDailySummaries(jstHour);
+      console.log('Daily summaries completed:', JSON.stringify(results, null, 2));
+      return {
+        statusCode: 200,
+        body: JSON.stringify(results)
+      };
+    } catch (error) {
+      console.error('Failed to run daily summaries:', error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
+  }
+
   // Check for thread-based reminder trigger (for Slack-created tasks)
   if (event.action === 'run_thread_reminders') {
     const { WebClient } = require('@slack/web-api');

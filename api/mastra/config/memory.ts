@@ -27,9 +27,59 @@ export const memory = new Memory({
     workingMemory: {
       enabled: true,
       schema: userProfileSchema, // Zodスキーマでユーザープロファイルを管理
+      scope: 'resource', // ユーザー単位で全スレッド共有（resourceId = Slack User ID）
     },
   },
 });
+
+// Working Memoryの設定オブジェクト（getWorkingMemory呼び出し用）
+const workingMemoryConfig = {
+  lastMessages: 20,
+  workingMemory: {
+    enabled: true,
+    schema: userProfileSchema,
+    scope: 'resource' as const,
+  },
+};
+
+/**
+ * ユーザーのWorking Memoryを取得する
+ * @param resourceId - Slack User ID（例: U07LNUP582X）
+ * @returns UserProfile（JSON文字列をパース）またはnull
+ */
+export async function getUserWorkingMemory(
+  resourceId: string
+): Promise<import('./memory-schema.js').UserProfile | null> {
+  try {
+    // resource-scopedの場合、threadIdは任意の値でOK（resourceIdで識別される）
+    const workingMemoryStr = await memory.getWorkingMemory({
+      threadId: `resource:${resourceId}`,
+      resourceId,
+      memoryConfig: workingMemoryConfig,
+    });
+
+    if (!workingMemoryStr) {
+      return null;
+    }
+
+    return JSON.parse(workingMemoryStr);
+  } catch (error) {
+    console.error(`Failed to get working memory for ${resourceId}:`, error);
+    return null;
+  }
+}
+
+/**
+ * ユーザーのリマインド希望時刻を取得する
+ * @param resourceId - Slack User ID
+ * @returns HH:mm形式の時刻文字列、または未設定の場合null
+ */
+export async function getUserReminderTiming(
+  resourceId: string
+): Promise<string | null> {
+  const profile = await getUserWorkingMemory(resourceId);
+  return profile?.preferences?.reminderTiming ?? null;
+}
 
 // スキーマ・ユーティリティの再エクスポート
 export {
