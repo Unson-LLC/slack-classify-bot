@@ -250,3 +250,161 @@ echo "    --payload '{\"action\": \"run_daily_summaries\"}' \\"
 echo "    --cli-binary-format raw-in-base64-out \\"
 echo "    --region $REGION --profile $PROFILE \\"
 echo "    /dev/stdout"
+
+# ==============================================================================
+# Rule 4: Daily Log Append (21:00 JST)
+# ==============================================================================
+
+DAILY_LOG_RULE_NAME="mana-daily-log-append"
+# 21:00 JST = 12:00 UTC
+DAILY_LOG_SCHEDULE="cron(0 12 * * ? *)"
+
+echo ""
+echo "🔧 Setting up EventBridge rule: $DAILY_LOG_RULE_NAME"
+echo "   Schedule: $DAILY_LOG_SCHEDULE (21:00 JST)"
+echo ""
+
+# 1. Create or update the EventBridge rule
+echo "[1/3] Creating EventBridge rule..."
+aws events put-rule \
+  --name "$DAILY_LOG_RULE_NAME" \
+  --schedule-expression "$DAILY_LOG_SCHEDULE" \
+  --state ENABLED \
+  --description "Append daily log to current sprint (21:00 JST)" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+# 2. Add Lambda permission for EventBridge to invoke
+echo "[2/3] Adding Lambda permission for EventBridge..."
+# Remove existing permission if exists (ignore error)
+aws lambda remove-permission \
+  --function-name "$FUNCTION_NAME" \
+  --statement-id "${DAILY_LOG_RULE_NAME}-permission" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager 2>/dev/null || true
+
+aws lambda add-permission \
+  --function-name "$FUNCTION_NAME" \
+  --statement-id "${DAILY_LOG_RULE_NAME}-permission" \
+  --action "lambda:InvokeFunction" \
+  --principal "events.amazonaws.com" \
+  --source-arn "arn:aws:events:${REGION}:${ACCOUNT_ID}:rule/${DAILY_LOG_RULE_NAME}" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+# 3. Add the Lambda target to the rule
+echo "[3/3] Adding Lambda target to rule..."
+aws events put-targets \
+  --rule "$DAILY_LOG_RULE_NAME" \
+  --targets "[{
+    \"Id\": \"mana-daily-log-target\",
+    \"Arn\": \"arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${FUNCTION_NAME}\",
+    \"Input\": \"{\\\"action\\\": \\\"append_daily_log\\\"}\"
+  }]" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+echo ""
+echo "✅ Daily log append rule setup complete!"
+echo ""
+echo "Rule Details:"
+echo "  - Name: $DAILY_LOG_RULE_NAME"
+echo "  - Schedule: 21:00 JST (12:00 UTC)"
+echo "  - Target: $FUNCTION_NAME Lambda"
+echo "  - Payload: {\"action\": \"append_daily_log\"}"
+echo ""
+echo "To test manually:"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME \\"
+echo "    --payload '{\"action\": \"append_daily_log\"}' \\"
+echo "    --cli-binary-format raw-in-base64-out \\"
+echo "    --region $REGION --profile $PROFILE \\"
+echo "    /dev/stdout"
+
+# ==============================================================================
+# Rule 5: Create Next Week Sprints (Friday 18:00 JST)
+# ==============================================================================
+
+SPRINT_RULE_NAME="mana-create-sprints"
+# Friday 18:00 JST = Friday 9:00 UTC
+SPRINT_SCHEDULE="cron(0 9 ? * FRI *)"
+
+echo ""
+echo "🔧 Setting up EventBridge rule: $SPRINT_RULE_NAME"
+echo "   Schedule: $SPRINT_SCHEDULE (Friday 18:00 JST)"
+echo ""
+
+# 1. Create or update the EventBridge rule
+echo "[1/3] Creating EventBridge rule..."
+aws events put-rule \
+  --name "$SPRINT_RULE_NAME" \
+  --schedule-expression "$SPRINT_SCHEDULE" \
+  --state ENABLED \
+  --description "Auto-create next week sprints (Friday 18:00 JST)" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+# 2. Add Lambda permission for EventBridge to invoke
+echo "[2/3] Adding Lambda permission for EventBridge..."
+# Remove existing permission if exists (ignore error)
+aws lambda remove-permission \
+  --function-name "$FUNCTION_NAME" \
+  --statement-id "${SPRINT_RULE_NAME}-permission" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager 2>/dev/null || true
+
+aws lambda add-permission \
+  --function-name "$FUNCTION_NAME" \
+  --statement-id "${SPRINT_RULE_NAME}-permission" \
+  --action "lambda:InvokeFunction" \
+  --principal "events.amazonaws.com" \
+  --source-arn "arn:aws:events:${REGION}:${ACCOUNT_ID}:rule/${SPRINT_RULE_NAME}" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+# 3. Add the Lambda target to the rule
+echo "[3/3] Adding Lambda target to rule..."
+aws events put-targets \
+  --rule "$SPRINT_RULE_NAME" \
+  --targets "[{
+    \"Id\": \"mana-sprint-target\",
+    \"Arn\": \"arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${FUNCTION_NAME}\",
+    \"Input\": \"{\\\"action\\\": \\\"create_next_sprints\\\"}\"
+  }]" \
+  --region "$REGION" \
+  --profile "$PROFILE" \
+  --no-cli-pager
+
+echo "      - Done."
+
+echo ""
+echo "✅ Sprint creation rule setup complete!"
+echo ""
+echo "Rule Details:"
+echo "  - Name: $SPRINT_RULE_NAME"
+echo "  - Schedule: Friday 18:00 JST (9:00 UTC)"
+echo "  - Target: $FUNCTION_NAME Lambda"
+echo "  - Payload: {\"action\": \"create_next_sprints\"}"
+echo ""
+echo "To test manually:"
+echo "  aws lambda invoke --function-name $FUNCTION_NAME \\"
+echo "    --payload '{\"action\": \"create_next_sprints\"}' \\"
+echo "    --cli-binary-format raw-in-base64-out \\"
+echo "    --region $REGION --profile $PROFILE \\"
+echo "    /dev/stdout"

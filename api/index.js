@@ -3633,6 +3633,147 @@ module.exports.handler = async (event, context, callback) => {
     }
   }
 
+  // ========================================
+  // マイルストーン・スプリント管理ハンドラー
+  // ========================================
+
+  // プロジェクト進捗サマリーを取得
+  if (event.action === 'get_project_summary') {
+    const { AirtableMilestoneClient } = require('./airtable-milestone-client');
+
+    const projectId = event.projectId;
+    if (!projectId) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'projectId is required' })
+      };
+    }
+
+    try {
+      const client = new AirtableMilestoneClient(projectId);
+      const summary = await client.getProjectSummary();
+
+      console.log(`Project summary for ${projectId}:`, JSON.stringify(summary, null, 2));
+      return {
+        statusCode: 200,
+        body: JSON.stringify(summary)
+      };
+    } catch (error) {
+      console.error(`Failed to get project summary for ${projectId}:`, error);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: error.message })
+      };
+    }
+  }
+
+  // 日次ログをスプリントに追記（EventBridgeから21:00 JSTに実行）
+  if (event.action === 'append_daily_log') {
+    const { AirtableMilestoneClient, PROJECT_BASE_MAPPING } = require('./airtable-milestone-client');
+    const { WebClient } = require('@slack/web-api');
+
+    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+    const results = [];
+    const targetProjects = event.projects || Object.keys(PROJECT_BASE_MAPPING);
+
+    // 今日の日付（JST）
+    const now = new Date();
+    const jstDate = now.toLocaleDateString('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      month: 'numeric',
+      day: 'numeric',
+    });
+    const weekday = now.toLocaleDateString('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      weekday: 'short',
+    });
+
+    for (const projectId of targetProjects) {
+      try {
+        const client = new AirtableMilestoneClient(projectId);
+        const currentSprint = await client.getCurrentSprint();
+
+        if (!currentSprint) {
+          console.log(`No active sprint for ${projectId}, skipping`);
+          results.push({ projectId, skipped: true, reason: 'no_active_sprint' });
+          continue;
+        }
+
+        // TODO: Slack履歴、タスク変更、会議記録から日次ログを生成
+        // 現時点ではプレースホルダー
+        const logEntry = `## ${jstDate} (${weekday})
+- Slack: （実装予定：チャンネル活動サマリ）
+- タスク: （実装予定：完了/追加タスク）
+- 会議: （実装予定：議事録サマリ）`;
+
+        await client.appendDailyLog(currentSprint.id, logEntry);
+
+        results.push({
+          projectId,
+          sprintId: currentSprint.id,
+          sprintPeriod: currentSprint.period,
+          success: true,
+        });
+
+        console.log(`Appended daily log to ${projectId} sprint ${currentSprint.period}`);
+      } catch (error) {
+        console.error(`Failed to append daily log for ${projectId}:`, error);
+        results.push({ projectId, error: error.message });
+      }
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        results,
+        timestamp: new Date().toISOString(),
+      })
+    };
+  }
+
+  // 次週スプリントを自動生成（EventBridgeから金曜18:00 JSTに実行）
+  if (event.action === 'create_next_sprints') {
+    const { AirtableMilestoneClient, PROJECT_BASE_MAPPING } = require('./airtable-milestone-client');
+
+    const results = [];
+    const targetProjects = event.projects || Object.keys(PROJECT_BASE_MAPPING);
+
+    for (const projectId of targetProjects) {
+      try {
+        const client = new AirtableMilestoneClient(projectId);
+
+        // 進行中のマイルストーンを取得してリンク
+        const activeMilestones = await client.getActiveMilestones();
+        const milestoneIds = activeMilestones.map(m => m.id);
+
+        const sprint = await client.createNextWeekSprint({
+          milestoneIds: milestoneIds.length > 0 ? milestoneIds : undefined,
+        });
+
+        results.push({
+          projectId,
+          sprintId: sprint.id,
+          period: sprint['期間'] || sprint.period,
+          url: sprint.url,
+          success: true,
+        });
+
+        console.log(`Created next week sprint for ${projectId}: ${sprint['期間'] || sprint.period}`);
+      } catch (error) {
+        console.error(`Failed to create next sprint for ${projectId}:`, error);
+        results.push({ projectId, error: error.message });
+      }
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        results,
+        timestamp: new Date().toISOString(),
+      })
+    };
+  }
+
   // Handle async followup generation (invoked from followup_modal_config)
   if (event.type === 'followup_async') {
     const { WebClient } = require('@slack/web-api');
